@@ -46,4 +46,20 @@ export class UsersController {
   async toggleBlock(data: { user_id: number; blocked: boolean }) {
     return this.usersService.toggleBlock(data.user_id, data.blocked);
   }
+
+  // Catálogo de roles para el selector del panel (el frontend tenía los ids
+  // hardcodeados). Lo consultan los tres roles administrativos, pero solo el
+  // administrador puede aplicar un cambio de rol vía AssignRole.
+  @GrpcMethod('AuthService', 'GetRoles')
+  @Roles('administrador', 'catedratico', 'auxiliar')
+  async getRoles() {
+    return { json: JSON.stringify(await this.usersService.getRoles()) };
+  }
+
+  // Docentes disponibles para asignar a un curso desde el panel.
+  @GrpcMethod('AuthService', 'ListTeachers')
+  @Roles('administrador', 'catedratico', 'auxiliar')
+  async listTeachers() {
+    return { json: JSON.stringify(await this.usersService.listTeachers()) };
+  }
 }

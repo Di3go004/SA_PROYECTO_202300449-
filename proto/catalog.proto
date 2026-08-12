@@ -13,6 +13,29 @@ service CatalogService {
   rpc EnrollStudent    (EnrollStudentRequest)    returns (MessageResponse);
   rpc UnenrollStudent  (UnenrollStudentRequest)  returns (MessageResponse);
   rpc GetMyCourses     (GetMyCoursesRequest)     returns (JsonResponse);
+
+  // ── Panel administrativo (Práctica 3) ──────────────────────────────────
+  // Reservadas a administrador/catedratico/auxiliar. Toda escritura se delega
+  // a los SPs de practica3_sps.sql: el servicio no ejecuta INSERT/UPDATE/DELETE
+  // sueltos sobre estas tablas.
+  rpc ListSemesters      (Empty)                     returns (JsonResponse);
+  rpc CreateSemester     (SemesterRequest)           returns (JsonResponse);
+  rpc UpdateSemester     (SemesterRequest)           returns (MessageResponse);
+  rpc DeleteSemester     (IdRequest)                 returns (MessageResponse);
+
+  rpc ListSchools        (Empty)                     returns (JsonResponse);
+  rpc CreateSchool       (SchoolRequest)             returns (JsonResponse);
+  rpc UpdateSchool       (SchoolRequest)             returns (MessageResponse);
+  rpc DeleteSchool       (IdRequest)                 returns (MessageResponse);
+
+  rpc ListCourses        (ListCoursesRequest)        returns (JsonResponse);
+  rpc CreateCourse       (CourseRequest)             returns (JsonResponse);
+  rpc UpdateCourse       (CourseRequest)             returns (MessageResponse);
+  rpc DeleteCourse       (IdRequest)                 returns (MessageResponse);
+
+  rpc ListCourseTeachers (IdRequest)                 returns (JsonResponse);
+  rpc AssignTeacher      (TeacherAssignmentRequest)  returns (MessageResponse);
+  rpc UnassignTeacher    (TeacherAssignmentRequest)  returns (MessageResponse);
 }
 
 message Empty {}
@@ -56,3 +79,42 @@ message UnenrollStudentRequest {
 }
 
 message GetMyCoursesRequest { int32 student_id = 1; }
+
+// ── Mensajes del panel administrativo ────────────────────────────────────
+// En creación el campo id viaja en 0 (proto3 no distingue "ausente" de "cero"
+// en escalares): el servicio nunca lo lee en los Create*, solo en los Update*.
+
+message IdRequest { int32 id = 1; }
+
+message SemesterRequest {
+  int32  id        = 1;
+  string name      = 2;
+  int32  year      = 3;
+  string code      = 4;  // vacío ⇒ lo deriva fn_build_semester_code
+  bool   is_active = 5;
+}
+
+message SchoolRequest {
+  int32  id   = 1;
+  string name = 2;
+  string code = 3;
+}
+
+message CourseRequest {
+  int32  id          = 1;
+  string name        = 2;
+  string code        = 3;
+  int32  school_id   = 4;
+  int32  semester_id = 5;
+}
+
+// Filtros opcionales del listado administrativo: 0 significa "sin filtro".
+message ListCoursesRequest {
+  int32 school_id   = 1;
+  int32 semester_id = 2;
+}
+
+message TeacherAssignmentRequest {
+  int32 teacher_id = 1;
+  int32 course_id  = 2;
+}
