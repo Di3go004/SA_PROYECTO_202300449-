@@ -21,6 +21,10 @@ app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecreto_yousac_2026';
 
+// Máximo de clases por página (Práctica 3). Es solo el valor por defecto que
+// manda el gateway: quien realmente impone el tope es fn_get_catalog_paginated.
+const MAX_PAGE_SIZE = 10;
+
 // ── Clientes gRPC (uno por microservicio, canal reutilizado) ─────────────────
 const PROTO_OPTS = { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true };
 
@@ -255,18 +259,23 @@ app.get('/api/catalog/courses', validateJWT, async (req, res) => {
 app.get('/api/catalog', validateJWT, async (req, res) => {
   try {
     const q = req.query;
+    // Los ids viajan como int32 en el proto: un query string vacío o no
+    // numérico se convierte en 0, que la función SQL interpreta como "sin
+    // filtro". El límite se envía tal cual y lo recorta la base a 10.
+    const int = v => parseInt(v) || 0;
     const result = await callGrpc(catalogClient, 'GetCatalog', {
       user_id: req.user.sub,
       role: req.user.role,
       semester: q.semester || '',
-      year: q.year || '',
-      school_id: q.school_id || '',
-      course_id: q.course_id || '',
-      teacher_id: q.teacher_id || '',
+      semester_id: int(q.semester_id),
+      year: int(q.year),
+      school_id: int(q.school_id),
+      course_id: int(q.course_id),
+      teacher_id: int(q.teacher_id),
       tag: q.tag || '',
       search: q.search || '',
       page: parseInt(q.page) || 1,
-      limit: parseInt(q.limit) || 20,
+      limit: parseInt(q.limit) || MAX_PAGE_SIZE,
     }, buildMetadata(req));
     res.json(JSON.parse(result.json));
   } catch (err) {

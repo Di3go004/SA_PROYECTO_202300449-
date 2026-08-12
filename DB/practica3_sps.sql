@@ -619,10 +619,16 @@ $$;
 --  · Para el rol estudiante se restringe a los cursos con inscripción activa,
 --    replicando lo que hacía vw_student_catalog pero sin duplicar filas cuando
 --    hay más de una inscripción.
+--
+--  · Hay dos filtros de semestre y no son redundantes: p_semester_id apunta a
+--    un periodo concreto ("Primer Semestre 2025"), mientras que p_semester_name
+--    agrupa el mismo periodo de todos los años ("Primer Semestre"). El panel usa
+--    el id; el catálogo del estudiante usa el nombre.
 CREATE OR REPLACE FUNCTION fn_get_catalog_paginated(
-    p_user_id     INT     DEFAULT NULL,
-    p_role        VARCHAR DEFAULT NULL,
-    p_semester_id INT     DEFAULT NULL,
+    p_user_id       INT     DEFAULT NULL,
+    p_role          VARCHAR DEFAULT NULL,
+    p_semester_id   INT     DEFAULT NULL,
+    p_semester_name VARCHAR DEFAULT NULL,
     p_school_id   INT     DEFAULT NULL,
     p_course_id   INT     DEFAULT NULL,
     p_teacher_id  INT     DEFAULT NULL,
@@ -697,7 +703,8 @@ BEGIN
                   AND e.is_active  = TRUE
             )
         )
-        AND (p_semester_id IS NULL OR cat.semester_id = p_semester_id)
+        AND (p_semester_id   IS NULL OR cat.semester_id = p_semester_id)
+        AND (p_semester_name IS NULL OR cat.semester    = p_semester_name)
         AND (p_school_id   IS NULL OR cat.school_id   = p_school_id)
         AND (p_course_id   IS NULL OR cat.course_id   = p_course_id)
         AND (p_teacher_id  IS NULL OR cat.teacher_id  = p_teacher_id)
