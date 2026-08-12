@@ -16,14 +16,32 @@ CREATE TABLE schools (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE courses (
+-- Semestres como entidad propia (Práctica 3: el panel administrativo debe poder
+-- darlos de alta/baja). Antes vivían como el VARCHAR courses.semester, que no
+-- se podía administrar ni referenciar.
+CREATE TABLE semesters (
     id         SERIAL PRIMARY KEY,
-    name       VARCHAR(255) NOT NULL,
-    code       VARCHAR(50)  NOT NULL UNIQUE,
-    school_id  INT NOT NULL REFERENCES schools(id),
-    semester   VARCHAR(50)  NOT NULL,
-    year       INT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    name       VARCHAR(50)  NOT NULL,   -- 'Primer Semestre', 'Segundo Semestre', 'Vacaciones Junio'
+    year       INT          NOT NULL,
+    code       VARCHAR(50)  NOT NULL UNIQUE,  -- '2025-1', '2025-2'
+    is_active  BOOLEAN DEFAULT FALSE,   -- solo uno debería estar activo a la vez
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (name, year)
+);
+
+CREATE TABLE courses (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(255) NOT NULL,
+    code        VARCHAR(50)  NOT NULL UNIQUE,
+    school_id   INT NOT NULL REFERENCES schools(id),
+    semester_id INT REFERENCES semesters(id),
+    -- semester/year se conservan denormalizados: las vistas y los filtros del
+    -- catálogo ya los consultan por nombre. trg_courses_sync_semester (más abajo)
+    -- los mantiene siempre en sincronía con la fila de semesters, así que la
+    -- normalización no obliga a reescribir vw_catalog ni las consultas existentes.
+    semester    VARCHAR(50)  NOT NULL,
+    year        INT NOT NULL,
+    created_at  TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE course_teachers (
@@ -60,6 +78,35 @@ CREATE TABLE recordings (
     updated_at         TIMESTAMP DEFAULT NOW()
 );
 
+-- ── INGESTA MASIVA (CSV) ────────────────────────────────────
+-- Bitácora de cada archivo procesado. Sirve para evidenciar en el informe qué
+-- se cargó, cuántas filas entraron y cuáles fallaron sin abortar todo el lote.
+
+CREATE TABLE csv_import_batches (
+    id            SERIAL PRIMARY KEY,
+    filename      VARCHAR(255) NOT NULL,
+    uploaded_by   INT NOT NULL,  -- Referencia lógica a users.id en yousac_auth_db
+    total_rows    INT NOT NULL DEFAULT 0,
+    inserted_rows INT NOT NULL DEFAULT 0,
+    skipped_rows  INT NOT NULL DEFAULT 0,  -- duplicados ya existentes (idempotencia)
+    failed_rows   INT NOT NULL DEFAULT 0,
+    status        VARCHAR(20) NOT NULL DEFAULT 'EN_PROCESO',
+    started_at    TIMESTAMP DEFAULT NOW(),
+    finished_at   TIMESTAMP,
+    CONSTRAINT chk_import_status
+        CHECK (status IN ('EN_PROCESO', 'COMPLETADO', 'COMPLETADO_CON_ERRORES', 'FALLIDO'))
+);
+
+CREATE TABLE csv_import_errors (
+    id            SERIAL PRIMARY KEY,
+    batch_id      INT NOT NULL REFERENCES csv_import_batches(id) ON DELETE CASCADE,
+    row_number    INT NOT NULL,  -- número de línea en el archivo original (1 = encabezado)
+    column_name   VARCHAR(100),
+    raw_line      TEXT,
+    error_message TEXT NOT NULL,
+    created_at    TIMESTAMP DEFAULT NOW()
+);
+
 -- ── ÍNDICES ─────────────────────────────────────────────────
 
 CREATE INDEX idx_courses_school       ON courses(school_id);
@@ -70,6 +117,17 @@ CREATE INDEX idx_recordings_teacher   ON recordings(teacher_id);
 CREATE INDEX idx_recordings_published ON recordings(is_published);
 CREATE INDEX idx_recordings_tags      ON recordings USING GIN(tags);
 CREATE INDEX idx_course_teachers_crs  ON course_teachers(course_id);
+
+-- Índices para la paginación filtrada del catálogo (Práctica 3): el ORDER BY
+-- created_at DESC + LIMIT/OFFSET se resuelve por índice en vez de ordenar toda
+-- la tabla en cada página.
+CREATE INDEX idx_courses_semester     ON courses(semester_id);
+CREATE INDEX idx_courses_school_sem   ON courses(school_id, semester_id);
+CREATE INDEX idx_recordings_created   ON recordings(created_at DESC);
+CREATE INDEX idx_recordings_crs_created ON recordings(course_id, created_at DESC);
+-- La carga masiva usa video_url para no reinsertar la misma grabación dos veces.
+CREATE UNIQUE INDEX idx_recordings_video_url ON recordings(video_url);
+CREATE INDEX idx_csv_errors_batch     ON csv_import_errors(batch_id);
 
 -- ── FUNCIONES ───────────────────────────────────────────────
 
@@ -110,6 +168,79 @@ BEGIN
         WHERE teacher_id = p_teacher_id
           AND course_id  = p_course_id
     );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Función: derivar el código de un semestre a partir de su nombre y año
+-- ('Primer Semestre', 2025) → '2025-1'. Se usa al auto-crear semestres desde
+-- la carga masiva, donde el CSV trae el nombre pero no el código.
+CREATE OR REPLACE FUNCTION fn_build_semester_code(p_name VARCHAR, p_year INT)
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN p_year || '-' || CASE
+        WHEN p_name ILIKE '%primer%'  THEN '1'
+        WHEN p_name ILIKE '%segundo%' THEN '2'
+        WHEN p_name ILIKE '%vacac%'   THEN 'V'
+        ELSE regexp_replace(lower(p_name), '[^a-z0-9]', '', 'g')
+    END;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Función: resolver (o crear) el semestre que corresponde a un nombre y año.
+-- La invocan tanto el trigger de courses como el SP de carga masiva, para que
+-- un CSV con semestres nuevos no falle por falta de catálogo previo.
+CREATE OR REPLACE FUNCTION fn_resolve_semester(p_name VARCHAR, p_year INT)
+RETURNS INT AS $$
+DECLARE
+    v_id INT;
+BEGIN
+    SELECT id INTO v_id FROM semesters WHERE name = p_name AND year = p_year;
+
+    IF v_id IS NULL THEN
+        INSERT INTO semesters (name, year, code)
+        VALUES (p_name, p_year, fn_build_semester_code(p_name, p_year))
+        RETURNING id INTO v_id;
+    END IF;
+
+    RETURN v_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Función: mantener courses.semester/year alineados con la fila de semesters.
+-- Acepta las dos direcciones: si viene semester_id manda la tabla semesters;
+-- si viene solo semester/year (como en los INSERT históricos y en el CSV) se
+-- resuelve el semester_id. Así el modelo queda normalizado sin romper ninguna
+-- de las consultas y vistas que ya filtran por el nombre del semestre.
+CREATE OR REPLACE FUNCTION fn_courses_sync_semester()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.semester_id IS NOT NULL THEN
+        SELECT name, year INTO NEW.semester, NEW.year
+        FROM semesters WHERE id = NEW.semester_id;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'El semestre % no existe', NEW.semester_id;
+        END IF;
+    ELSE
+        NEW.semester_id := fn_resolve_semester(NEW.semester, NEW.year);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Función: propagar a courses el renombrado de un semestre. Sin esto, editar
+-- un semestre desde el panel dejaría los cursos con el nombre viejo.
+CREATE OR REPLACE FUNCTION fn_semesters_propagate()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.name IS DISTINCT FROM OLD.name OR NEW.year IS DISTINCT FROM OLD.year THEN
+        UPDATE courses
+        SET semester = NEW.name,
+            year     = NEW.year
+        WHERE semester_id = NEW.id;
+    END IF;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -159,6 +290,7 @@ SELECT
     c.name               AS course_name,
     c.code               AS course_code,
     c.semester,
+    c.semester_id,
     c.year,
     s.id                 AS school_id,
     s.name               AS school_name,
@@ -177,19 +309,75 @@ FROM vw_catalog cat
 JOIN enrollments e ON cat.course_id = e.course_id
 WHERE e.is_active = TRUE;
 
--- Vista: cursos con sus docentes asignados
+-- Vista: cursos con sus docentes asignados (una fila por par curso-docente).
+-- Incluye school_id/semester_id porque el catálogo filtra por ellos.
 CREATE OR REPLACE VIEW vw_courses_with_teachers AS
 SELECT
     c.id         AS course_id,
     c.name       AS course_name,
     c.code       AS course_code,
     c.semester,
+    c.semester_id,
     c.year,
+    s.id         AS school_id,
     s.name       AS school_name,
     ct.teacher_id
 FROM courses       c
 JOIN schools       s  ON c.school_id   = s.id
 JOIN course_teachers ct ON ct.course_id = c.id;
+
+-- Vista: cursos para el panel administrativo. A diferencia de la anterior usa
+-- LEFT JOIN y agrega los docentes en un array, para que un curso recién creado
+-- (todavía sin docente asignado) siga apareciendo en la tabla de gestión.
+CREATE OR REPLACE VIEW vw_courses_admin AS
+SELECT
+    c.id          AS course_id,
+    c.name        AS course_name,
+    c.code        AS course_code,
+    c.school_id,
+    s.name        AS school_name,
+    s.code        AS school_code,
+    c.semester_id,
+    c.semester,
+    c.year,
+    c.created_at,
+    COALESCE(
+        ARRAY_AGG(ct.teacher_id) FILTER (WHERE ct.teacher_id IS NOT NULL),
+        '{}'
+    )             AS teacher_ids,
+    COUNT(DISTINCT ct.teacher_id) AS total_teachers
+FROM courses c
+JOIN schools s ON c.school_id = s.id
+LEFT JOIN course_teachers ct ON ct.course_id = c.id
+GROUP BY c.id, c.name, c.code, c.school_id, s.name, s.code,
+         c.semester_id, c.semester, c.year, c.created_at;
+
+-- Vista: semestres con el conteo de cursos que dependen de ellos. El panel la
+-- usa para avisar antes de intentar borrar un semestre en uso.
+CREATE OR REPLACE VIEW vw_semesters_admin AS
+SELECT
+    sem.id,
+    sem.name,
+    sem.year,
+    sem.code,
+    sem.is_active,
+    sem.created_at,
+    COUNT(c.id) AS total_courses
+FROM semesters sem
+LEFT JOIN courses c ON c.semester_id = sem.id
+GROUP BY sem.id, sem.name, sem.year, sem.code, sem.is_active, sem.created_at;
+
+-- Vista: escuelas con el conteo de cursos, mismo propósito que la anterior.
+CREATE OR REPLACE VIEW vw_schools_admin AS
+SELECT
+    s.id,
+    s.name,
+    s.code,
+    s.created_at,
+    COUNT(c.id) AS total_courses
+FROM schools s
+LEFT JOIN courses c ON c.school_id = s.id
+GROUP BY s.id, s.name, s.code, s.created_at;
 
 -- Vista: resumen de inscripciones por curso
 CREATE OR REPLACE VIEW vw_course_enrollment_summary AS
@@ -302,6 +490,18 @@ $$;
 
 -- ── TRIGGERS ────────────────────────────────────────────────
 
+-- Trigger: mantener sincronizados courses.semester_id ↔ courses.semester/year
+CREATE TRIGGER trg_courses_sync_semester
+    BEFORE INSERT OR UPDATE ON courses
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_courses_sync_semester();
+
+-- Trigger: propagar el renombrado de un semestre a sus cursos
+CREATE TRIGGER trg_semesters_propagate
+    AFTER UPDATE ON semesters
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_semesters_propagate();
+
 -- Trigger: actualizar updated_at en recordings
 CREATE TRIGGER trg_recordings_updated_at
     BEFORE UPDATE ON recordings
@@ -334,6 +534,17 @@ INSERT INTO schools (name, code) VALUES
     ('Escuela de Ingeniería Mecánica', 'EIM'),
     ('Escuela de Ingeniería Química',  'EIQ');
 
+INSERT INTO semesters (name, year, code, is_active) VALUES
+    ('Primer Semestre',  2024, '2024-1', FALSE),
+    ('Segundo Semestre', 2024, '2024-2', FALSE),
+    ('Primer Semestre',  2025, '2025-1', FALSE),
+    ('Segundo Semestre', 2025, '2025-2', FALSE),
+    ('Primer Semestre',  2026, '2026-1', FALSE),
+    ('Segundo Semestre', 2026, '2026-2', TRUE);
+
+-- Nótese que estos INSERT no indican semester_id: trg_courses_sync_semester lo
+-- resuelve contra la tabla semesters recién sembrada. Es la misma ruta que sigue
+-- la carga masiva de CSV.
 INSERT INTO courses (name, code, school_id, semester, year) VALUES
     ('Estructuras de Datos',        'EDD-2025-1',  1, 'Primer Semestre',  2025),
     ('Sistemas Operativos 1',       'SO1-2025-1',  1, 'Primer Semestre',  2025),
