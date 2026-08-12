@@ -13,6 +13,14 @@ service AuthService {
   rpc GetUserById (GetUserByIdRequest) returns (JsonResponse);
   rpc AssignRole  (AssignRoleRequest)  returns (MessageResponse);
   rpc ToggleBlock (ToggleBlockRequest) returns (MessageResponse);
+
+  // ── Panel administrativo (Práctica 3) ──────────────────────────────────
+  // GetRoles alimenta el selector de roles del panel (hasta ahora el frontend
+  // tenía los ids hardcodeados). ListTeachers devuelve los usuarios con rol
+  // catedratico/auxiliar: son los "Docentes" que administra el panel y los
+  // candidatos a asignarse a un curso, que vive en la otra base de datos.
+  rpc GetRoles     (Empty) returns (JsonResponse);
+  rpc ListTeachers (Empty) returns (JsonResponse);
 }
 
 message Empty {}
