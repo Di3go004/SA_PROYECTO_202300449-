@@ -5,6 +5,7 @@ import { DatabaseModule } from './common/database.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { AdminModule } from './admin/admin.module';
+import { ImportModule } from './import/import.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { AdminModule } from './admin/admin.module';
     CatalogModule,
     EnrollmentsModule,
     AdminModule,
+    ImportModule,
   ],
   controllers: [AppController],
 })
