@@ -90,7 +90,8 @@ CREATE TABLE csv_import_batches (
     inserted_rows INT NOT NULL DEFAULT 0,
     skipped_rows  INT NOT NULL DEFAULT 0,  -- duplicados ya existentes (idempotencia)
     failed_rows   INT NOT NULL DEFAULT 0,
-    status        VARCHAR(20) NOT NULL DEFAULT 'EN_PROCESO',
+    -- 30 y no 20: 'COMPLETADO_CON_ERRORES' son 22 caracteres.
+    status        VARCHAR(30) NOT NULL DEFAULT 'EN_PROCESO',
     started_at    TIMESTAMP DEFAULT NOW(),
     finished_at   TIMESTAMP,
     CONSTRAINT chk_import_status

@@ -24,6 +24,8 @@ services:
       - ./DB/init_postgres.sql:/docker-entrypoint-initdb.d/00_init.sql
       - ./DB/auth_db.sql:/docker-entrypoint-initdb.d/01_auth.sql
       - ./DB/catalog_db.sql:/docker-entrypoint-initdb.d/02_catalog.sql
+      # SPs de la Práctica 3: van al final porque dependen de las tablas de 02.
+      - ./DB/practica3_sps.sql:/docker-entrypoint-initdb.d/03_practica3_sps.sql
     ports:
       - "5432:5432"
     networks:
