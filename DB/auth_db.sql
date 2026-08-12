@@ -269,8 +269,30 @@ CREATE TRIGGER trg_validate_email_domain
 
 -- ── DATOS INICIALES ─────────────────────────────────────────
 
+-- El orden de este INSERT fija los ids que el panel usa al asignar roles
+-- (1=administrador, 2=estudiante, 3=catedratico, 4=auxiliar). Práctica 3 pide
+-- que las rutas administrativas las compartan administrador/catedratico/auxiliar,
+-- así que "docente" pasó a llamarse "catedratico" conservando su id 3.
 INSERT INTO roles (name, description) VALUES
     ('administrador', 'Acceso total al sistema'),
     ('estudiante',    'Acceso a grabaciones de cursos inscritos'),
-    ('docente',       'Puede subir grabaciones y ver estadísticas');
+    ('catedratico',   'Imparte cursos: sube grabaciones, gestiona catálogo y ve estadísticas'),
+    ('auxiliar',      'Apoya al catedrático: gestiona catálogo y carga masiva, sin administrar usuarios');
+
+-- Usuarios de prueba, uno por rol, para poder evidenciar el RBAC del panel
+-- administrativo sin tener que registrar a mano en cada arranque.
+-- Contraseña para los cuatro: Yousac2026!  (bcrypt, 12 rounds — igual que auth.service.ts)
+INSERT INTO users (email, password_hash, full_name, role_id) VALUES
+    ('admin@ingenieria.usac.edu.gt',
+     '$2b$12$PpC8HU5sydP/ym58.BjmfOMvLrhUCGrHIlLFccyS0VbywPuHg.zrW',
+     'Administrador YoUSAC', 1),
+    ('estudiante@ingenieria.usac.edu.gt',
+     '$2b$12$PpC8HU5sydP/ym58.BjmfOMvLrhUCGrHIlLFccyS0VbywPuHg.zrW',
+     'Estudiante de Prueba', 2),
+    ('catedratico@ingenieria.usac.edu.gt',
+     '$2b$12$PpC8HU5sydP/ym58.BjmfOMvLrhUCGrHIlLFccyS0VbywPuHg.zrW',
+     'Catedrático de Prueba', 3),
+    ('auxiliar@ingenieria.usac.edu.gt',
+     '$2b$12$PpC8HU5sydP/ym58.BjmfOMvLrhUCGrHIlLFccyS0VbywPuHg.zrW',
+     'Auxiliar de Prueba', 4);
 
