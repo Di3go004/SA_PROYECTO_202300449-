@@ -45,18 +45,23 @@ message MessageResponse { string message = 1; }
 // viajan serializadas como JSON por el mismo motivo que en auth.proto.
 message JsonResponse { string json = 1; }
 
+// Los identificadores viajan como int32 y no como string: son las claves que
+// fn_get_catalog_paginated compara contra columnas INT. El 0 significa "sin
+// filtro" (proto3 no distingue ausente de cero en escalares) y el servicio lo
+// convierte a NULL antes de llamar a la función.
 message GetCatalogRequest {
-  int32  user_id    = 1;
-  string role       = 2;
-  string semester   = 3;
-  string year       = 4;
-  string school_id  = 5;
-  string course_id  = 6;
-  string teacher_id = 7;
-  string tag        = 8;
-  string search     = 9;
-  int32  page       = 10;
-  int32  limit      = 11;
+  int32  user_id       = 1;
+  string role          = 2;
+  string semester      = 3;   // nombre: agrupa el mismo periodo de todos los años
+  int32  semester_id   = 4;   // periodo concreto (semestre + año)
+  int32  year          = 5;
+  int32  school_id     = 6;
+  int32  course_id     = 7;
+  int32  teacher_id    = 8;
+  string tag           = 9;
+  string search        = 10;
+  int32  page          = 11;
+  int32  limit         = 12;
 }
 
 message GetCoursesRequest { string school_id = 1; }
