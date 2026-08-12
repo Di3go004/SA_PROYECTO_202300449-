@@ -99,6 +99,21 @@ const validateJWT = (req, res, next) => {
   }
 };
 
+// Middleware: exigir uno de los roles administrativos (Práctica 3). Es la
+// primera barrera; catalog-service y auth-service vuelven a exigir el rol al
+// recibir la metadata gRPC, porque no asumen que el gateway sea su único
+// interlocutor posible.
+const ADMIN_ROLES = ['administrador', 'catedratico', 'auxiliar'];
+
+const requireAdminRole = (req, res, next) => {
+  if (!ADMIN_ROLES.includes(req.user?.role)) {
+    return res.status(403).json({
+      message: 'No tenés permisos para acceder al panel de administración',
+    });
+  }
+  next();
+};
+
 // Helper para las rutas "GET/POST algo/:id → RPC(id) → JSON" (la mayoría de
 // catálogo/analítica siguen este mismo patrón).
 function jsonIdRoute(method, path_, client, rpcMethod, buildRequest, fallbackMessage) {
@@ -307,6 +322,101 @@ app.get('/api/enrollments/my-courses', validateJWT, async (req, res) => {
     handleGrpcError(err, res, 'Error al obtener mis cursos');
   }
 });
+
+// ── Panel administrativo (Práctica 3) ──────────────────────────────────────
+// Todas exigen JWT + uno de los tres roles administrativos. Las escrituras
+// terminan invocando procedimientos almacenados dentro del microservicio.
+
+// Helper: las 16 rutas de administración siguen el mismo patrón
+// "validar JWT → validar rol → una RPC → responder". opts.json distingue las
+// RPC que devuelven JsonResponse (payload serializado) de las que devuelven
+// MessageResponse (mensaje plano).
+function adminRoute(method, path_, client, rpcMethod, buildRequest, fallbackMessage, opts = {}) {
+  app[method](path_, validateJWT, requireAdminRole, async (req, res) => {
+    try {
+      const result = await callGrpc(client, rpcMethod, buildRequest(req), buildMetadata(req));
+      res.status(opts.status || 200).json(opts.json ? JSON.parse(result.json) : result);
+    } catch (err) {
+      handleGrpcError(err, res, fallbackMessage);
+    }
+  });
+}
+
+const semesterBody = req => ({
+  id: parseInt(req.params.id) || 0,
+  name: req.body.name || '',
+  year: parseInt(req.body.year) || 0,
+  code: req.body.code || '',
+  is_active: !!req.body.is_active,
+});
+
+// Semestres
+adminRoute('get', '/api/admin/semesters', catalogClient, 'ListSemesters',
+  () => ({}), 'Error al obtener semestres', { json: true });
+adminRoute('post', '/api/admin/semesters', catalogClient, 'CreateSemester',
+  semesterBody, 'Error al crear semestre', { json: true, status: 201 });
+adminRoute('put', '/api/admin/semesters/:id', catalogClient, 'UpdateSemester',
+  semesterBody, 'Error al actualizar semestre');
+adminRoute('delete', '/api/admin/semesters/:id', catalogClient, 'DeleteSemester',
+  req => ({ id: parseInt(req.params.id) }), 'Error al eliminar semestre');
+
+// Escuelas / Áreas
+const schoolBody = req => ({
+  id: parseInt(req.params.id) || 0,
+  name: req.body.name || '',
+  code: req.body.code || '',
+});
+
+adminRoute('get', '/api/admin/schools', catalogClient, 'ListSchools',
+  () => ({}), 'Error al obtener escuelas', { json: true });
+adminRoute('post', '/api/admin/schools', catalogClient, 'CreateSchool',
+  schoolBody, 'Error al crear escuela', { json: true, status: 201 });
+adminRoute('put', '/api/admin/schools/:id', catalogClient, 'UpdateSchool',
+  schoolBody, 'Error al actualizar escuela');
+adminRoute('delete', '/api/admin/schools/:id', catalogClient, 'DeleteSchool',
+  req => ({ id: parseInt(req.params.id) }), 'Error al eliminar escuela');
+
+// Cursos
+const courseBody = req => ({
+  id: parseInt(req.params.id) || 0,
+  name: req.body.name || '',
+  code: req.body.code || '',
+  school_id: parseInt(req.body.school_id) || 0,
+  semester_id: parseInt(req.body.semester_id) || 0,
+});
+
+// El listado admite filtros opcionales por escuela y semestre; 0 = sin filtro.
+adminRoute('get', '/api/admin/courses', catalogClient, 'ListCourses',
+  req => ({
+    school_id: parseInt(req.query.school_id) || 0,
+    semester_id: parseInt(req.query.semester_id) || 0,
+  }), 'Error al obtener cursos', { json: true });
+adminRoute('post', '/api/admin/courses', catalogClient, 'CreateCourse',
+  courseBody, 'Error al crear curso', { json: true, status: 201 });
+adminRoute('put', '/api/admin/courses/:id', catalogClient, 'UpdateCourse',
+  courseBody, 'Error al actualizar curso');
+adminRoute('delete', '/api/admin/courses/:id', catalogClient, 'DeleteCourse',
+  req => ({ id: parseInt(req.params.id) }), 'Error al eliminar curso');
+
+// Asignaciones docente ↔ curso
+adminRoute('get', '/api/admin/courses/:id/teachers', catalogClient, 'ListCourseTeachers',
+  req => ({ id: parseInt(req.params.id) }), 'Error al obtener docentes del curso', { json: true });
+adminRoute('post', '/api/admin/courses/:id/teachers', catalogClient, 'AssignTeacher',
+  req => ({
+    course_id: parseInt(req.params.id),
+    teacher_id: parseInt(req.body.teacher_id) || 0,
+  }), 'Error al asignar docente');
+adminRoute('delete', '/api/admin/courses/:id/teachers/:teacher_id', catalogClient, 'UnassignTeacher',
+  req => ({
+    course_id: parseInt(req.params.id),
+    teacher_id: parseInt(req.params.teacher_id),
+  }), 'Error al desasignar docente');
+
+// Docentes y roles (viven en auth-service, no en el catálogo)
+adminRoute('get', '/api/admin/teachers', authClient, 'ListTeachers',
+  () => ({}), 'Error al obtener docentes', { json: true });
+adminRoute('get', '/api/admin/roles', authClient, 'GetRoles',
+  () => ({}), 'Error al obtener roles', { json: true });
 
 // ── Reproducción: checkpoints, ratings, sesiones (protegidas) ─────────────
 app.post('/api/checkpoints', validateJWT, async (req, res) => {
