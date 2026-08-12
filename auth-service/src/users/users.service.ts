@@ -54,6 +54,27 @@ export class UsersService {
   // (yousac_auth_db) mientras que las asignaciones a curso viven en la del
   // catálogo, que solo guarda teacher_id como referencia lógica: por eso el
   // panel necesita este listado para poder resolver nombre y correo.
+  // Resuelve correo → id para la carga masiva de catalog-service. Solo devuelve
+  // usuarios que YA son catedrático o auxiliar: un CSV no puede crear cuentas ni
+  // convertir a un estudiante en docente por el hecho de nombrarlo.
+  async resolveTeachersByEmail(emails: string[]) {
+    if (!emails?.length) return [];
+
+    const normalized = emails
+      .map((e) => String(e || '').trim().toLowerCase())
+      .filter((e) => e !== '');
+    if (!normalized.length) return [];
+
+    const result = await this.db.authQuery(
+      `SELECT id, email, full_name, role_name, is_blocked
+         FROM vw_users_with_role
+        WHERE lower(email) = ANY($1::TEXT[])
+          AND role_name IN ('catedratico', 'auxiliar')`,
+      [normalized],
+    );
+    return result.rows;
+  }
+
   async listTeachers() {
     const result = await this.db.authQuery(
       `SELECT id, email, full_name, role_name, is_active, is_blocked

@@ -126,6 +126,9 @@ services:
       CATALOG_DB_USER: yousac
       CATALOG_DB_PASS: yousac_secret
       JWT_SECRET: supersecreto_yousac_2026
+      # La carga masiva resuelve correo→teacher_id llamando a auth-service por
+      # gRPC: los usuarios viven en la otra base y este servicio no la toca.
+      AUTH_GRPC_URL: auth-service:50052
       GRPC_PORT: 50053
       PORT: 3003
       NODE_ENV: development

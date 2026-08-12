@@ -62,4 +62,14 @@ export class UsersController {
   async listTeachers() {
     return { json: JSON.stringify(await this.usersService.listTeachers()) };
   }
+
+  // La consume catalog-service durante la carga masiva, reenviando el JWT del
+  // usuario que subió el archivo: la llamada entre microservicios no viaja
+  // anónima ni con credenciales de servicio, sigue sujeta al mismo RBAC.
+  @GrpcMethod('AuthService', 'ResolveTeachersByEmail')
+  @Roles('administrador', 'catedratico', 'auxiliar')
+  async resolveTeachersByEmail(data: { emails: string[] }) {
+    const teachers = await this.usersService.resolveTeachersByEmail(data.emails || []);
+    return { json: JSON.stringify(teachers) };
+  }
 }

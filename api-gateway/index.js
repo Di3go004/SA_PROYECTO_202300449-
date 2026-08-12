@@ -9,6 +9,7 @@ const cookieParser = require('cookie-parser');
 const jwt = require('jsonwebtoken');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
+const multer = require('multer');
 
 const app = express();
 
@@ -420,6 +421,60 @@ adminRoute('delete', '/api/admin/courses/:id/teachers/:teacher_id', catalogClien
     course_id: parseInt(req.params.id),
     teacher_id: parseInt(req.params.teacher_id),
   }), 'Error al desasignar docente');
+
+// ── Ingesta masiva CSV ─────────────────────────────────────────────────────
+// El archivo se recibe en memoria y NO se escribe a disco: se reenvía como
+// texto por gRPC y catalog-service lo parsea. El gateway no interpreta el
+// dominio del archivo, solo transporta.
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    const isCsv = file.mimetype?.includes('csv') ||
+                  file.mimetype === 'application/vnd.ms-excel' ||
+                  file.originalname?.toLowerCase().endsWith('.csv');
+    cb(isCsv ? null : new Error('El archivo debe tener extensión .csv'), isCsv);
+  },
+});
+
+app.post(
+  '/api/admin/import/csv',
+  validateJWT,
+  requireAdminRole,
+  (req, res, next) => {
+    // multer se invoca a mano para poder traducir sus errores (tamaño excedido,
+    // extensión inválida) a un 400 con mensaje, en vez del 500 por defecto.
+    csvUpload.single('file')(req, res, (err) => {
+      if (err) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+          ? 'El archivo supera el límite de 10 MB'
+          : err.message;
+        return res.status(400).json({ message });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No se recibió ningún archivo (campo "file")' });
+    }
+    try {
+      const result = await callGrpc(catalogClient, 'BulkImportRecordings', {
+        filename: req.file.originalname,
+        csv_content: req.file.buffer.toString('utf8'),
+      }, buildMetadata(req));
+      res.json(JSON.parse(result.json));
+    } catch (err) {
+      handleGrpcError(err, res, 'Error al procesar el archivo CSV');
+    }
+  },
+);
+
+// Historial de cargas: evidencia de qué se importó y qué filas fallaron.
+adminRoute('get', '/api/admin/import/batches', catalogClient, 'ListImportBatches',
+  () => ({}), 'Error al obtener el historial de cargas', { json: true });
+adminRoute('get', '/api/admin/import/batches/:id', catalogClient, 'GetImportBatch',
+  req => ({ id: parseInt(req.params.id) }), 'Error al obtener el detalle de la carga', { json: true });
 
 // Docentes y roles (viven en auth-service, no en el catálogo)
 adminRoute('get', '/api/admin/teachers', authClient, 'ListTeachers',

@@ -36,6 +36,12 @@ service CatalogService {
   rpc ListCourseTeachers (IdRequest)                 returns (JsonResponse);
   rpc AssignTeacher      (TeacherAssignmentRequest)  returns (MessageResponse);
   rpc UnassignTeacher    (TeacherAssignmentRequest)  returns (MessageResponse);
+
+  // Ingesta masiva. El archivo viaja como texto y se parsea acá dentro: el
+  // gateway solo recibe el multipart y no interpreta el dominio.
+  rpc BulkImportRecordings (BulkImportRequest) returns (JsonResponse);
+  rpc ListImportBatches    (Empty)             returns (JsonResponse);
+  rpc GetImportBatch       (IdRequest)         returns (JsonResponse);
 }
 
 message Empty {}
@@ -122,4 +128,11 @@ message ListCoursesRequest {
 message TeacherAssignmentRequest {
   int32 teacher_id = 1;
   int32 course_id  = 2;
+}
+
+// El id de quien sube el archivo NO viaja en el request: se toma del JWT que ya
+// validó el guard, para que nadie pueda atribuir una carga a otro usuario.
+message BulkImportRequest {
+  string filename    = 1;
+  string csv_content = 2;
 }
