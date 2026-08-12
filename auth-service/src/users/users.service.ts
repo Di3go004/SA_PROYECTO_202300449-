@@ -49,4 +49,18 @@ export class UsersService {
     const result = await this.db.authQuery('SELECT * FROM roles ORDER BY id');
     return result.rows;
   }
+
+  // Los "Docentes" que administra el panel de la Práctica 3. Viven en esta base
+  // (yousac_auth_db) mientras que las asignaciones a curso viven en la del
+  // catálogo, que solo guarda teacher_id como referencia lógica: por eso el
+  // panel necesita este listado para poder resolver nombre y correo.
+  async listTeachers() {
+    const result = await this.db.authQuery(
+      `SELECT id, email, full_name, role_name, is_active, is_blocked
+         FROM vw_users_with_role
+        WHERE role_name IN ('catedratico', 'auxiliar')
+        ORDER BY full_name`,
+    );
+    return result.rows;
+  }
 }
