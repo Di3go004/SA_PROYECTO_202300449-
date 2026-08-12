@@ -23,6 +23,10 @@ export class GrpcAuthGuard implements CanActivate {
 
     try {
       data.__user = this.jwtService.verify(token);
+      // Se conserva el token crudo para poder reenviarlo en las llamadas gRPC
+      // salientes (ver AuthGrpcClient): así el tráfico entre microservicios
+      // viaja con la identidad real del usuario y no con una de servicio.
+      data.__token = token;
       return true;
     } catch {
       throw new UnauthorizedException('Token inválido o expirado');
