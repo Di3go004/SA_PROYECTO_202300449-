@@ -63,11 +63,18 @@ export class CatalogService {
     return result.rows;
   }
 
+  // vw_courses_with_teachers no expone una columna "name" (es course_name), así
+  // que el ORDER BY anterior fallaba siempre; y hasta el PR de esquema de esta
+  // práctica la vista tampoco tenía school_id, por lo que el filtro por escuela
+  // reventaba igual. Se ordena por course_name y se filtra NULL-safe con un solo
+  // texto de consulta.
   async getCourses(schoolId?: string) {
-    const query = schoolId
-      ? 'SELECT * FROM vw_courses_with_teachers WHERE school_id = $1 ORDER BY name'
-      : 'SELECT * FROM vw_courses_with_teachers ORDER BY name';
-    const result = await this.db.query(query, schoolId ? [schoolId] : []);
+    const result = await this.db.query(
+      `SELECT * FROM vw_courses_with_teachers
+        WHERE ($1::INT IS NULL OR school_id = $1)
+        ORDER BY course_name`,
+      [schoolId ? parseInt(schoolId, 10) : null],
+    );
     return result.rows;
   }
 
