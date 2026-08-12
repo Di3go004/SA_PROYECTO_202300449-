@@ -1,0 +1,97 @@
+syntax = "proto3";
+package reproduccion;
+option go_package = "./proto";
+
+// Contrato gRPC unificado del microservicio de Reproducción (Go). Dos consumidores:
+// api-gateway (todas las RPCs, ya que /api/videos, /api/checkpoints y /api/ratings
+// dejaron de ser REST) y analytics-service (GetVideoStats/GetUserProgress, para
+// sincronizar sus métricas propias en MySQL).
+service ReproduccionService {
+  rpc GetCheckpoint   (CheckpointRequest)     returns (CheckpointResponse);
+  rpc SaveCheckpoint  (SaveCheckpointRequest) returns (CheckpointResponse);
+  rpc GetVideoStats   (VideoStatsRequest)     returns (VideoStatsResponse);
+  rpc SaveRating      (SaveRatingRequest)     returns (RatingStatsResponse);
+  rpc GetRatingStats  (VideoStatsRequest)     returns (RatingStatsResponse);
+  rpc GetUserProgress (UserProgressRequest)   returns (UserProgressResponse);
+  rpc StartSession    (StartSessionRequest)   returns (StartSessionResponse);
+  rpc RecordEvent     (RecordEventRequest)    returns (Ack);
+}
+
+message CheckpointRequest { string user_id = 1; string video_id = 2; }
+message CheckpointResponse {
+  string user_id          = 1;
+  string video_id         = 2;
+  int32  position_seconds = 3;
+  float  progress_percent = 4;
+  bool   completed        = 5;
+}
+
+message SaveCheckpointRequest {
+  string user_id          = 1;
+  string video_id         = 2;
+  int32  position_seconds = 3;
+  int32  total_seconds    = 4;
+}
+
+message VideoStatsRequest { string video_id = 1; }
+message VideoStatsResponse {
+  string video_id               = 1;
+  int32  total_views            = 2;
+  float  average_progress       = 3;
+  float  recommendation_percent = 4;
+}
+
+message SaveRatingRequest {
+  string user_id  = 1;
+  string video_id = 2;
+  int32  stars    = 3;
+  string comment  = 4;
+}
+// Estadísticas reales de calificación (no confundir con VideoStatsResponse, que
+// analytics-service consume con un mapeo de campos propio ya establecido).
+message RatingStatsResponse {
+  string video_id               = 1;
+  int32  total_ratings          = 2;
+  float  average_stars          = 3;
+  float  recommendation_percent = 4;
+}
+
+message UserProgressRequest {
+  string user_id            = 1;
+  string course_id          = 2;
+  // IDs de video del curso cuyo progreso se quiere agregar. reproduction-service
+  // no conoce la relación curso→video (vive en catalog_db/Postgres), así que quien
+  // llama debe resolverla antes. Si viene vacío, no hay forma de calcular progreso
+  // real y se responde con overall_progress=0 y videos=[] (comportamiento explícito,
+  // ya no un stub silencioso).
+  repeated string video_ids = 3;
+}
+message UserProgressResponse {
+  string user_id            = 1;
+  string course_id          = 2;
+  float  overall_progress   = 3;
+  repeated VideoProgress videos = 4;
+}
+message VideoProgress {
+  string video_id         = 1;
+  float  progress_percent = 2;
+  bool   completed         = 3;
+}
+
+message StartSessionRequest {
+  string user_id    = 1;
+  string video_id    = 2;
+  string resolution = 3;
+}
+message StartSessionResponse {
+  string session_id            = 1;
+  int32  start_position         = 2;
+  CheckpointResponse checkpoint = 3; // ausente (mensaje no seteado) si no había checkpoint previo
+}
+
+message RecordEventRequest {
+  string session_id       = 1;
+  string type             = 2;
+  int32  position_seconds = 3;
+}
+message Ack { bool ok = 1; }

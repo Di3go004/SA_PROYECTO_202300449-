@@ -1,0 +1,55 @@
+syntax = "proto3";
+package auth;
+option go_package = "./proto";
+
+// Contrato gRPC unificado del microservicio de Autenticación/Identidades/Roles (TypeScript/NestJS).
+// Único consumidor: api-gateway. Login/Register/Logout son operaciones públicas (el gateway
+// no exige JWT previo); el resto exige rol administrador y viaja con metadata "authorization".
+service AuthService {
+  rpc Register    (RegisterRequest)    returns (MessageResponse);
+  rpc Login       (LoginRequest)       returns (LoginResponse);
+  rpc Logout      (LogoutRequest)      returns (MessageResponse);
+  rpc GetAllUsers (Empty)              returns (JsonResponse);
+  rpc GetUserById (GetUserByIdRequest) returns (JsonResponse);
+  rpc AssignRole  (AssignRoleRequest)  returns (MessageResponse);
+  rpc ToggleBlock (ToggleBlockRequest) returns (MessageResponse);
+}
+
+message Empty {}
+message MessageResponse { string message = 1; }
+
+// Filas de vw_users_with_role (auth_db.sql) viajan serializadas como JSON: la vista tiene
+// columnas variables y no vale la pena mantener un mensaje .proto en paralelo a cada ALTER de la vista.
+message JsonResponse { string json = 1; }
+
+message RegisterRequest {
+  string email     = 1;
+  string password  = 2;
+  string full_name = 3;
+}
+
+message LoginRequest {
+  string email    = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token = 1;
+  string role  = 2;
+  string email = 3;
+}
+
+message LogoutRequest { string token = 1; }
+
+message GetUserByIdRequest { int32 id = 1; }
+
+message AssignRoleRequest {
+  int32 user_id  = 1;
+  int32 role_id  = 2;
+  int32 admin_id = 3;
+}
+
+message ToggleBlockRequest {
+  int32 user_id = 1;
+  bool  blocked = 2;
+}

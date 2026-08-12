@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+.env
+app/grpc/checkpoints_pb2.py
+app/grpc/checkpoints_pb2_grpc.py

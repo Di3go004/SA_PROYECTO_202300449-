@@ -1,0 +1,58 @@
+syntax = "proto3";
+package catalog;
+option go_package = "./proto";
+
+// Contrato gRPC unificado del microservicio de Catálogo/Inscripciones (TypeScript/NestJS).
+// Único consumidor: api-gateway, que ya validó el JWT y reenvía la identidad del usuario
+// como campos explícitos del request (gRPC no tiene sesión implícita).
+service CatalogService {
+  rpc GetCatalog       (GetCatalogRequest)      returns (JsonResponse);
+  rpc GetSchools       (Empty)                  returns (JsonResponse);
+  rpc GetCourses       (GetCoursesRequest)       returns (JsonResponse);
+  rpc GetRecordingById (GetRecordingByIdRequest) returns (JsonResponse);
+  rpc EnrollStudent    (EnrollStudentRequest)    returns (MessageResponse);
+  rpc UnenrollStudent  (UnenrollStudentRequest)  returns (MessageResponse);
+  rpc GetMyCourses     (GetMyCoursesRequest)     returns (JsonResponse);
+}
+
+message Empty {}
+message MessageResponse { string message = 1; }
+
+// Filas de vw_catalog / vw_student_catalog / vw_courses_with_teachers (catalog_db.sql)
+// viajan serializadas como JSON por el mismo motivo que en auth.proto.
+message JsonResponse { string json = 1; }
+
+message GetCatalogRequest {
+  int32  user_id    = 1;
+  string role       = 2;
+  string semester   = 3;
+  string year       = 4;
+  string school_id  = 5;
+  string course_id  = 6;
+  string teacher_id = 7;
+  string tag        = 8;
+  string search     = 9;
+  int32  page       = 10;
+  int32  limit      = 11;
+}
+
+message GetCoursesRequest { string school_id = 1; }
+
+message GetRecordingByIdRequest {
+  int32  id      = 1;
+  int32  user_id = 2;
+  string role    = 3;
+}
+
+message EnrollStudentRequest {
+  int32 student_id = 1;
+  int32 course_id  = 2;
+  int32 admin_id   = 3;
+}
+
+message UnenrollStudentRequest {
+  int32 student_id = 1;
+  int32 course_id  = 2;
+}
+
+message GetMyCoursesRequest { int32 student_id = 1; }

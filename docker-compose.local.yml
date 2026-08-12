@@ -1,0 +1,253 @@
+networks:
+  yousac-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  mysql_data:
+
+services:
+
+  # ── BASES DE DATOS ───────────────────────────────────────────
+
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: yousac_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yousac
+      POSTGRES_PASSWORD: yousac_secret
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./DB/init_postgres.sql:/docker-entrypoint-initdb.d/00_init.sql
+      - ./DB/auth_db.sql:/docker-entrypoint-initdb.d/01_auth.sql
+      - ./DB/catalog_db.sql:/docker-entrypoint-initdb.d/02_catalog.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yousac -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    container_name: yousac_mongodb
+    restart: unless-stopped
+    command: ["mongod", "--quiet"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: yousac
+      MONGO_INITDB_ROOT_PASSWORD: yousac_secret
+      MONGO_INITDB_DATABASE: yousac_reproduction_db
+    volumes:
+      - mongodb_data:/data/db
+      - ./DB/reproduction_mongodb.js:/docker-entrypoint-initdb.d/init.js
+    ports:
+      - "27017:27017"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok", "--json", "relaxed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mysql-db:
+    image: mysql:8
+    container_name: yousac_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: yousac_root
+      MYSQL_DATABASE: yousac_analytics_db
+      MYSQL_USER: yousac
+      MYSQL_PASSWORD: yousac_secret
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./DB/analytics_mysql.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "yousac", "-pyousac_secret"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MICROSERVICIOS (tráfico interno: solo gRPC — ver /proto) ──
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: yousac_auth
+    restart: unless-stopped
+    environment:
+      AUTH_DB_HOST: postgres-db
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: yousac_auth_db
+      AUTH_DB_USER: yousac
+      AUTH_DB_PASS: yousac_secret
+      JWT_SECRET: supersecreto_yousac_2026
+      JWT_TTL: 8h
+      GRPC_PORT: 50052
+      PORT: 3000
+      NODE_ENV: development
+    ports:
+      - "50052:50052" # gRPC (único protocolo hacia el api-gateway)
+      - "3000:3000"   # HTTP: solo /health
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile
+    container_name: yousac_catalog
+    restart: unless-stopped
+    environment:
+      CATALOG_DB_HOST: postgres-db
+      CATALOG_DB_PORT: 5432
+      CATALOG_DB_NAME: yousac_catalog_db
+      CATALOG_DB_USER: yousac
+      CATALOG_DB_PASS: yousac_secret
+      JWT_SECRET: supersecreto_yousac_2026
+      GRPC_PORT: 50053
+      PORT: 3003
+      NODE_ENV: development
+    ports:
+      - "50053:50053" # gRPC (único protocolo hacia el api-gateway)
+      - "3003:3003"   # HTTP: solo /health
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  reproduction-service:
+    build:
+      context: ./reproduction-service
+      dockerfile: Dockerfile
+    container_name: yousac_reproduction
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://yousac:yousac_secret@mongodb:27017/yousac_reproduction_db?authSource=admin
+      GRPC_PORT: 50051
+      HTTP_PORT: 3001
+      ENV: development
+    ports:
+      - "50051:50051" # gRPC (consumido por api-gateway y por analytics-service)
+      - "3001:3001"   # HTTP: solo /health
+    networks:
+      - yousac-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    container_name: yousac_analytics
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql-db
+      MYSQL_PORT: 3306
+      MYSQL_DB: yousac_analytics_db
+      MYSQL_USER: yousac
+      MYSQL_PASSWORD: yousac_secret
+      GRPC_REPRODUCTION_HOST: reproduction-service
+      GRPC_REPRODUCTION_PORT: 50051
+      GRPC_PORT: 50054
+      HTTP_PORT: 3002
+      ENV: development
+    ports:
+      - "50054:50054" # gRPC (único protocolo hacia el api-gateway)
+      - "3002:3002"   # HTTP: solo /health
+    networks:
+      - yousac-network
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      reproduction-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3002/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── API GATEWAY (único punto de entrada REST del cliente web) ─
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: yousac_gateway
+    restart: unless-stopped
+    environment:
+      AUTH_GRPC_URL: auth-service:50052
+      CATALOG_GRPC_URL: catalog-service:50053
+      REPRODUCTION_GRPC_URL: reproduction-service:50051
+      ANALYTICS_GRPC_URL: analytics-service:50054
+      JWT_SECRET: supersecreto_yousac_2026
+      CORS_ORIGIN: http://localhost:5173
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    networks:
+      - yousac-network
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      reproduction-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── FRONTEND ─────────────────────────────────────────────────
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: yousac_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8080
+    ports:
+      - "5173:5173"
+    networks:
+      - yousac-network
+    depends_on:
+      api-gateway:
+        condition: service_healthy

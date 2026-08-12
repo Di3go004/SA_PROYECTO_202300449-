@@ -1,0 +1,23 @@
+# Node
+node_modules/
+dist/
+.env
+
+# Go
+*.exe
+vendor/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Docker
+.docker/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.claude

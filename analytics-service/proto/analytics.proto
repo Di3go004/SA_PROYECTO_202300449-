@@ -1,0 +1,32 @@
+syntax = "proto3";
+package analytics;
+option go_package = "./proto";
+
+// Contrato gRPC unificado del microservicio de Analítica (Python/FastAPI).
+// Único consumidor de negocio: api-gateway. analytics-service además actúa como
+// cliente gRPC de ReproduccionService (checkpoints.proto) para sincronizar métricas;
+// eso no cambia con este contrato, que es solo el lado servidor de analytics-service.
+service AnalyticsService {
+  rpc GetVideoMetrics       (IdRequest)            returns (JsonResponse);
+  rpc GetCourseMetrics      (IdRequest)             returns (JsonResponse);
+  rpc GetTeacherStats       (IdRequest)             returns (JsonResponse);
+  rpc GetStudentProgress    (StudentCourseRequest)  returns (JsonResponse);
+  rpc SyncVideoMetrics      (IdRequest)             returns (JsonResponse);
+  rpc GetTopVideos          (LimitRequest)          returns (JsonResponse);
+  rpc GetSystemStats        (Empty)                 returns (JsonResponse);
+  rpc GetTeacherPerformance (IdRequest)             returns (JsonResponse);
+  rpc GetCourseProgress     (IdRequest)             returns (JsonResponse);
+  rpc GetVideoEngagement    (IdRequest)             returns (JsonResponse);
+}
+
+message Empty {}
+message IdRequest { int32 id = 1; }
+message StudentCourseRequest {
+  int32 student_id = 1;
+  int32 course_id  = 2;
+}
+message LimitRequest { int32 limit = 1; }
+
+// Filas/vistas de analytics_mysql.sql (vw_top_videos, vw_system_stats,
+// vw_teacher_performance, vw_course_student_progress, etc.) viajan como JSON.
+message JsonResponse { string json = 1; }
