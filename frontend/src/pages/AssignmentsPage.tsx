@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import api from '../services/api'
+import api, { authApi } from '../services/api'
 
 interface Course {
   course_id: number
@@ -21,12 +21,12 @@ interface Progress {
 }
 
 export default function AssignmentsPage() {
-  const navigate        = useNavigate()
+  const navigate = useNavigate()
   const { user, logout } = useAuth()
 
-  const [courses,   setCourses]   = useState<Course[]>([])
-  const [progress,  setProgress]  = useState<Record<number, Progress>>({})
-  const [loading,   setLoading]   = useState(true)
+  const [courses, setCourses]   = useState<Course[]>([])
+  const [progress, setProgress] = useState<Record<number, Progress>>({})
+  const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
     const load = async () => {
@@ -34,18 +34,19 @@ export default function AssignmentsPage() {
         const res = await api.get('/api/enrollments/my-courses')
         setCourses(res.data)
 
-        // Cargar progreso por curso desde analítica
+        // El progreso viene del servicio de analítica; si no responde, la
+        // tarjeta del curso se muestra igual sin la barra.
         const progressMap: Record<number, Progress> = {}
         const userId = localStorage.getItem('userId') || '1'
         await Promise.all(
           res.data.map(async (c: Course) => {
             try {
               const pRes = await api.get(
-                `/api/analytics/metrics/student/${userId}/course/${c.course_id}`
+                `/api/analytics/metrics/student/${userId}/course/${c.course_id}`,
               )
               if (pRes.data) progressMap[c.course_id] = pRes.data
-            } catch {}
-          })
+            } catch { /* curso sin métricas todavía */ }
+          }),
         )
         setProgress(progressMap)
       } catch (err) {
@@ -58,99 +59,77 @@ export default function AssignmentsPage() {
   }, [])
 
   const handleLogout = async () => {
-    try { await api.post('/api/auth/logout') } catch {}
+    try { await authApi.logout() } catch { /* la sesión local se limpia igual */ }
     logout()
     navigate('/login')
   }
 
-  const getProgressColor = (pct: number) => {
-    if (pct >= 80) return '#22c55e'
-    if (pct >= 40) return '#f59e0b'
-    return '#3b82f6'
-  }
+  const progressColor = (pct: number) =>
+    pct >= 80 ? '#1b4d1f' : pct >= 40 ? '#a97a12' : 'var(--secondary)'
 
   return (
-    <div style={styles.container}>
-      {/* Navbar */}
-      <nav style={styles.navbar}>
-        <div style={styles.navBrand}>🎓 YoUSAC</div>
-        <div style={styles.navLinks}>
-          <button className="btn btn-secondary" onClick={() => navigate('/catalog')} style={{ padding: '6px 14px' }}>
-            Catálogo
-          </button>
+    <div className="public-shell">
+      <nav className="navbar">
+        <div className="navbar-brand">
+          <span className="sidebar-logo">Yo</span>
+          <span>YoUSAC</span>
         </div>
-        <div style={styles.navRight}>
-          <span style={styles.navUser}>{user?.email}</span>
-          <span className="badge badge-blue">{user?.role}</span>
-          <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '6px 14px' }}>
-            Salir
-          </button>
+        <div className="navbar-actions">
+          <button className="btn btn-secondary btn-sm" onClick={() => navigate('/catalog')}>Catálogo</button>
+          <span className="badge badge-info">{user?.role}</span>
+          <button className="btn btn-secondary btn-sm" onClick={handleLogout}>Salir</button>
         </div>
       </nav>
 
-      <div style={styles.content}>
-        <div style={styles.pageHeader}>
-          <h1 style={styles.pageTitle}>Mis Cursos Inscritos</h1>
-          <p style={styles.pageSubtitle}>
-            {courses.length} curso{courses.length !== 1 ? 's' : ''} inscrito{courses.length !== 1 ? 's' : ''}
-          </p>
+      <div className="page-wrap">
+        <div>
+          <h1>Mis cursos</h1>
+          <p className="subtitle">Cursos en los que estás inscrito y tu avance en cada uno</p>
         </div>
 
         {loading ? (
-          <div style={styles.loading}>Cargando tus cursos...</div>
+          <div className="loading-block"><span className="spinner" /> Cargando cursos…</div>
         ) : courses.length === 0 ? (
-          <div style={styles.empty}>
-            <p style={{ fontSize: 16, marginBottom: 8 }}>No tenés cursos inscritos</p>
-            <p style={{ fontSize: 13, color: '#64748b' }}>Contactá al administrador para gestionar tus inscripciones</p>
+          <div className="table-wrap">
+            <div className="empty-state">
+              <span className="empty-icon">📘</span>
+              Todavía no estás inscrito en ningún curso
+            </div>
           </div>
         ) : (
-          <div style={styles.grid}>
-            {courses.map(course => {
-              const prog = progress[course.course_id]
-              const pct  = Number(prog?.overall_progress ?? 0)
-
+          <div className="card-grid">
+            {courses.map(c => {
+              const p = progress[c.course_id]
+              const pct = Math.round(p?.overall_progress ?? 0)
               return (
-                <div key={course.course_id} style={styles.card}>
-                  {/* Header */}
-                  <div style={styles.cardHeader}>
-                    <span className="badge badge-blue">{course.school_name}</span>
-                    <span style={styles.semester}>{course.semester} {course.year}</span>
+                <div key={c.course_id} className="card">
+                  <div className="card-header">
+                    <h2 className="card-title">{c.course_name}</h2>
+                    <span className="badge badge-info">{c.course_code}</span>
                   </div>
+                  <p className="subtitle" style={{ marginBottom: 4 }}>{c.school_name}</p>
+                  <p className="muted" style={{ marginBottom: 14 }}>{c.semester} · {c.year}</p>
 
-                  {/* Nombre del curso */}
-                  <h2 style={styles.courseName}>{course.course_name}</h2>
-                  <p style={styles.courseCode}>{course.course_code}</p>
-
-                  {/* Barra de progreso */}
-                  <div style={styles.progressSection}>
-                    <div style={styles.progressHeader}>
-                      <span style={styles.progressLabel}>Progreso global</span>
-                      <span style={{ ...styles.progressPct, color: getProgressColor(pct) }}>
-                        {pct.toFixed(0)}%
-                      </span>
-                    </div>
-                    <div style={styles.progressBar}>
+                  {p && (
+                    <>
+                      <div className="row-between" style={{ marginBottom: 6 }}>
+                        <span className="status-label muted">Progreso</span>
+                        <span className="cell-strong">{pct}%</span>
+                      </div>
                       <div style={{
-                        ...styles.progressFill,
-                        width: `${pct}%`,
-                        background: getProgressColor(pct),
-                      }} />
-                    </div>
-                    {prog && (
-                      <p style={styles.progressDetail}>
-                        {prog.videos_completed} / {prog.videos_watched} clases completadas
+                        height: 6, borderRadius: 'var(--radius-pill)',
+                        background: 'var(--surface-container-high)', overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          width: `${pct}%`, height: '100%',
+                          background: progressColor(pct), transition: 'width .3s',
+                        }} />
+                      </div>
+                      <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                        {p.videos_completed} de {p.videos_watched} clases completadas
                       </p>
-                    )}
-                  </div>
-
-                  {/* Botón */}
-                  <button
-                    className="btn btn-primary"
-                    style={{ width: '100%', marginTop: 16 }}
-                    onClick={() => navigate(`/catalog?course_id=${course.course_id}`)}
-                  >
-                    Ver grabaciones →
-                  </button>
+                    </>
+                  )}
                 </div>
               )
             })}
@@ -159,45 +138,4 @@ export default function AssignmentsPage() {
       </div>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { minHeight: '100vh', background: '#0f172a' },
-  navbar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '14px 24px', background: '#1e293b', borderBottom: '1px solid #334155',
-  },
-  navBrand: { fontSize: 20, fontWeight: 700, color: '#f1f5f9' },
-  navLinks: { display: 'flex', gap: 8 },
-  navRight: { display: 'flex', alignItems: 'center', gap: 12 },
-  navUser: { fontSize: 13, color: '#94a3b8' },
-  content: { padding: '24px', maxWidth: 1280, margin: '0 auto' },
-  pageHeader: { marginBottom: 28 },
-  pageTitle: { fontSize: 24, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 },
-  pageSubtitle: { fontSize: 14, color: '#64748b' },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: 20,
-  },
-  card: {
-    background: '#1e293b', border: '1px solid #334155',
-    borderRadius: 12, padding: 20,
-  },
-  cardHeader: {
-    display: 'flex', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 12,
-  },
-  semester: { fontSize: 12, color: '#64748b' },
-  courseName: { fontSize: 17, fontWeight: 600, color: '#f1f5f9', marginBottom: 4, lineHeight: 1.3 },
-  courseCode: { fontSize: 12, color: '#64748b', marginBottom: 16 },
-  progressSection: {},
-  progressHeader: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 },
-  progressLabel: { fontSize: 13, color: '#94a3b8' },
-  progressPct: { fontSize: 13, fontWeight: 700 },
-  progressBar: { height: 6, background: '#334155', borderRadius: 99 },
-  progressFill: { height: '100%', borderRadius: 99, transition: 'width 0.3s' },
-  progressDetail: { fontSize: 12, color: '#64748b', marginTop: 6 },
-  loading: { textAlign: 'center', color: '#64748b', padding: 60 },
-  empty: { textAlign: 'center', color: '#94a3b8', padding: 60 },
 }

@@ -1,232 +1,187 @@
 // src/pages/CatalogPage.tsx
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { catalogApi, authApi } from '../services/api'
+import { catalogApi, adminApi, authApi, Recording, School, Semester } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
+import Pagination from '../components/Pagination'
 
-interface Recording {
-  recording_id: number
-  title: string
-  description: string
-  course_name: string
-  school_name: string
-  teacher_id: number
-  duration_seconds: number
-  thumbnail_url: string
-  recommendation_pct: number
-  semester: string
-  year: number
-  tags: string[]
-}
-
-interface School {
-  id: number
-  name: string
-}
+const ADMIN_ROLES = ['administrador', 'catedratico', 'auxiliar']
 
 export default function CatalogPage() {
-  const navigate        = useNavigate()
+  const navigate = useNavigate()
   const { user, logout } = useAuth()
 
   const [recordings, setRecordings] = useState<Recording[]>([])
-  const [schools,    setSchools]    = useState<School[]>([])
-  const [loading,    setLoading]    = useState(true)
-  const [search,     setSearch]     = useState('')
-  const [schoolId,   setSchoolId]   = useState('')
-  const [semester,   setSemester]   = useState('')
-  const [page,       setPage]       = useState(1)
+  const [schools, setSchools]       = useState<School[]>([])
+  const [semesters, setSemesters]   = useState<Semester[]>([])
+  const [loading, setLoading]       = useState(true)
 
-  const fetchCatalog = async () => {
-    setLoading(true)
-    try {
-      const params: Record<string, string> = { page: String(page), limit: '20' }
-      if (search)   params.search   = search
-      if (schoolId) params.school_id = schoolId
-      if (semester) params.semester = semester
+  // `search` es lo que se escribe; `applied` lo que realmente se consultó. Sin
+  // separarlos, cada tecla dispararía una petición y reiniciaría la página.
+  const [search, setSearch]   = useState('')
+  const [applied, setApplied] = useState('')
+  const [schoolId, setSchoolId]     = useState('')
+  const [semesterId, setSemesterId] = useState('')
 
-      const res = await catalogApi.getAll(params)
-      setRecordings(res.data.data || [])
-    } catch (err) {
-      console.error('Error cargando catálogo:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [page, setPage]   = useState(1)
+  const [meta, setMeta]   = useState({ total: 0, totalPages: 0, limit: 10 })
+
+  const canAdmin = ADMIN_ROLES.includes(user?.role || '')
 
   useEffect(() => {
-    catalogApi.getSchools().then(res => setSchools(res.data))
-    fetchCatalog()
-  }, [page])
+    // Los filtros se alimentan del catálogo administrativo cuando el rol lo
+    // permite; un estudiante solo necesita las escuelas públicas.
+    catalogApi.getSchools().then(r => setSchools(r.data)).catch(() => {})
+    if (canAdmin) adminApi.listSemesters().then(r => setSemesters(r.data)).catch(() => {})
+  }, [canAdmin])
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
+  // Toda la paginación y el filtrado los resuelve el backend: acá solo se
+  // reenvían los parámetros y se pinta lo que devuelve.
+  useEffect(() => {
+    setLoading(true)
+    const params: Record<string, string> = { page: String(page) }
+    if (applied)    params.search      = applied
+    if (schoolId)   params.school_id   = schoolId
+    if (semesterId) params.semester_id = semesterId
+
+    catalogApi.getAll(params)
+      .then(({ data }) => {
+        setRecordings(data.data || [])
+        setMeta({ total: data.total, totalPages: data.total_pages, limit: data.limit })
+      })
+      .catch(() => setRecordings([]))
+      .finally(() => setLoading(false))
+  }, [page, applied, schoolId, semesterId])
+
+  // Cambiar un filtro debe devolver a la página 1: si estabas en la 3 y el nuevo
+  // filtro solo tiene 1 página, quedarías viendo un resultado vacío.
+  const applyFilter = (setter: (v: string) => void) => (value: string) => {
+    setter(value)
     setPage(1)
-    fetchCatalog()
+  }
+
+  const submitSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    setApplied(search)
+    setPage(1)
+  }
+
+  const clearAll = () => {
+    setSearch(''); setApplied(''); setSchoolId(''); setSemesterId(''); setPage(1)
   }
 
   const handleLogout = async () => {
-    try { await authApi.logout() } catch {}
+    try { await authApi.logout() } catch { /* la sesión local se limpia igual */ }
     logout()
     navigate('/login')
   }
 
-  const formatDuration = (seconds: number) => {
+  const duration = (seconds: number) => {
     const h = Math.floor(seconds / 3600)
     const m = Math.floor((seconds % 3600) / 60)
-    return h > 0 ? `${h}h ${m}m` : `${m}m`
+    return h > 0 ? `${h}h ${m}m` : `${m} min`
   }
 
+  const hasFilters = applied || schoolId || semesterId
+
   return (
-    <div style={styles.container}>
-      {/* Navbar */}
-      <nav style={styles.navbar}>
-        <div style={styles.navBrand}>🎓 YoUSAC</div>
-        <div style={styles.navRight}>
-          <span style={styles.navUser}>{user?.email}</span>
-          <span className="badge badge-blue">{user?.role}</span>
-          <button className="btn btn-secondary" onClick={handleLogout} style={{ padding: '6px 14px' }}>
-            Salir
-          </button>
+    <div className="public-shell">
+      <nav className="navbar">
+        <div className="navbar-brand">
+          <span className="sidebar-logo">Yo</span>
+          <span>YoUSAC</span>
+        </div>
+        <div className="navbar-actions">
+          {canAdmin && (
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate('/admin')}>
+              Panel admin
+            </button>
+          )}
+          <span className="badge badge-info">{user?.role}</span>
+          <button className="btn btn-secondary btn-sm" onClick={handleLogout}>Salir</button>
         </div>
       </nav>
 
-      <div style={styles.content}>
-        {/* Filtros */}
-        <form onSubmit={handleSearch} style={styles.filters}>
+      <div className="page-wrap">
+        <div>
+          <h1>Catálogo de clases</h1>
+          <p className="subtitle">Grabaciones disponibles según tus cursos y permisos</p>
+        </div>
+
+        <form className="toolbar" onSubmit={submitSearch}>
           <input
-            type="text"
-            placeholder="Buscar por título, descripción o tema..."
+            className="grow"
+            placeholder="Buscar por título o descripción…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{ flex: 2 }}
           />
-          <select value={schoolId} onChange={e => setSchoolId(e.target.value)} style={{ flex: 1 }}>
+          <select value={schoolId} onChange={e => applyFilter(setSchoolId)(e.target.value)}>
             <option value="">Todas las escuelas</option>
-            {schools.map(s => (
-              <option key={s.id} value={String(s.id)}>{s.name}</option>
-            ))}
+            {schools.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <select value={semester} onChange={e => setSemester(e.target.value)} style={{ flex: 1 }}>
-            <option value="">Todos los semestres</option>
-            <option value="Primer Semestre">Primer Semestre</option>
-            <option value="Segundo Semestre">Segundo Semestre</option>
-          </select>
+          {semesters.length > 0 && (
+            <select value={semesterId} onChange={e => applyFilter(setSemesterId)(e.target.value)}>
+              <option value="">Todos los semestres</option>
+              {semesters.map(s => <option key={s.id} value={s.id}>{s.name} {s.year}</option>)}
+            </select>
+          )}
           <button type="submit" className="btn btn-primary">Buscar</button>
-          <button type="button" className="btn btn-secondary" onClick={() => {
-            setSearch(''); setSchoolId(''); setSemester(''); setPage(1); fetchCatalog()
-          }}>
-            Limpiar
-          </button>
+          {hasFilters && <button type="button" className="btn btn-ghost" onClick={clearAll}>Limpiar</button>}
         </form>
 
-        {/* Grid de grabaciones */}
         {loading ? (
-          <div style={styles.loading}>Cargando grabaciones...</div>
+          <div className="loading-block"><span className="spinner" /> Cargando catálogo…</div>
         ) : recordings.length === 0 ? (
-          <div style={styles.empty}>No se encontraron grabaciones con los filtros aplicados</div>
-        ) : (
-          <div style={styles.grid}>
-            {recordings.map(rec => (
-              <div
-                key={rec.recording_id}
-                style={styles.card}
-                onClick={() => navigate(`/player/${rec.recording_id}`)}
-              >
-                {/* Thumbnail */}
-                <div style={styles.thumbnail}>
-                  {rec.thumbnail_url
-                    ? <img src={rec.thumbnail_url} alt={rec.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    : <div style={styles.thumbnailPlaceholder}>▶</div>
-                  }
-                  <span style={styles.duration}>{formatDuration(rec.duration_seconds)}</span>
-                </div>
-
-                {/* Info */}
-                <div style={styles.cardBody}>
-                  <h3 style={styles.cardTitle}>{rec.title}</h3>
-                  <p style={styles.cardCourse}>{rec.course_name}</p>
-                  <p style={styles.cardSchool}>{rec.school_name}</p>
-                  <div style={styles.cardFooter}>
-                    <span style={styles.semester}>{rec.semester} {rec.year}</span>
-                    <span style={styles.recommendation}>
-                      ⭐ {Number(rec.recommendation_pct ?? 0).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="table-wrap">
+            <div className="empty-state">
+              <span className="empty-icon">🎬</span>
+              {hasFilters
+                ? 'Ninguna clase coincide con los filtros aplicados'
+                : 'Todavía no hay clases disponibles para tu usuario'}
+            </div>
           </div>
-        )}
+        ) : (
+          <>
+            <div className="card-grid">
+              {recordings.map(r => (
+                <article key={r.recording_id} className="video-card"
+                  onClick={() => navigate(`/player/${r.recording_id}`)}>
+                  <div className="video-thumb">
+                    {r.thumbnail_url
+                      ? <img src={r.thumbnail_url} alt={r.title} loading="lazy"
+                          onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                      : '🎬'}
+                    <span className="video-duration">{duration(r.duration_seconds)}</span>
+                  </div>
+                  <div className="video-body">
+                    <h3 className="video-title">{r.title}</h3>
+                    <span className="video-meta">{r.course_name}</span>
+                    <span className="video-meta">
+                      {r.school_name} · {r.semester} {r.year}
+                    </span>
+                    {r.tags?.length > 0 && (
+                      <div className="tag-row">
+                        {r.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
 
-        {/* Paginación */}
-        <div style={styles.pagination}>
-          <button
-            className="btn btn-secondary"
-            disabled={page === 1}
-            onClick={() => setPage(p => p - 1)}
-          >
-            ← Anterior
-          </button>
-          <span style={{ color: '#94a3b8' }}>Página {page}</span>
-          <button
-            className="btn btn-secondary"
-            disabled={recordings.length < 20}
-            onClick={() => setPage(p => p + 1)}
-          >
-            Siguiente →
-          </button>
-        </div>
+            {/* El máximo de 10 por página lo impone el backend, no este componente. */}
+            <div className="table-wrap">
+              <Pagination
+                page={page}
+                totalPages={meta.totalPages}
+                total={meta.total}
+                limit={meta.limit}
+                onChange={setPage}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { minHeight: '100vh', background: '#0f172a' },
-  navbar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '14px 24px', background: '#1e293b', borderBottom: '1px solid #334155',
-    position: 'sticky', top: 0, zIndex: 10,
-  },
-  navBrand: { fontSize: 20, fontWeight: 700, color: '#f1f5f9' },
-  navRight: { display: 'flex', alignItems: 'center', gap: 12 },
-  navUser: { fontSize: 13, color: '#94a3b8' },
-  content: { padding: '24px', maxWidth: 1280, margin: '0 auto' },
-  filters: {
-    display: 'flex', gap: 12, marginBottom: 28,
-    background: '#1e293b', padding: 16, borderRadius: 12,
-    border: '1px solid #334155', flexWrap: 'wrap',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: 20,
-  },
-  card: {
-    background: '#1e293b', border: '1px solid #334155', borderRadius: 12,
-    overflow: 'hidden', cursor: 'pointer', transition: 'transform 0.2s, border-color 0.2s',
-  },
-  thumbnail: {
-    position: 'relative', height: 160,
-    background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  thumbnailPlaceholder: { fontSize: 48, color: '#3b82f6' },
-  duration: {
-    position: 'absolute', bottom: 8, right: 8,
-    background: 'rgba(0,0,0,0.8)', color: '#f1f5f9',
-    padding: '2px 8px', borderRadius: 4, fontSize: 12,
-  },
-  cardBody: { padding: '14px 16px' },
-  cardTitle: { fontSize: 15, fontWeight: 600, color: '#f1f5f9', marginBottom: 6, lineHeight: 1.4 },
-  cardCourse: { fontSize: 13, color: '#3b82f6', marginBottom: 2 },
-  cardSchool: { fontSize: 12, color: '#64748b', marginBottom: 10 },
-  cardFooter: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  semester: { fontSize: 12, color: '#64748b' },
-  recommendation: { fontSize: 13, color: '#fbbf24', fontWeight: 600 },
-  loading: { textAlign: 'center', color: '#64748b', padding: 60, fontSize: 16 },
-  empty: { textAlign: 'center', color: '#64748b', padding: 60, fontSize: 15 },
-  pagination: {
-    display: 'flex', justifyContent: 'center', alignItems: 'center',
-    gap: 16, marginTop: 32,
-  },
 }

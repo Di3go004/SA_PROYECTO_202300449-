@@ -3,10 +3,14 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
+import { useToast } from '../components/Toast'
+
+const ADMIN_ROLES = ['administrador', 'catedratico', 'auxiliar']
 
 export default function LoginPage() {
   const navigate  = useNavigate()
   const { login } = useAuth()
+  const toast     = useToast()
 
   const [tab,      setTab]      = useState<'login' | 'register'>('login')
   const [email,    setEmail]    = useState('')
@@ -22,7 +26,8 @@ export default function LoginPage() {
     try {
       const res = await authApi.login(email, password)
       login({ token: res.data.token, email, role: res.data.role })
-      navigate('/catalog')
+      // Los roles administrativos entran directo al panel; el resto al catálogo.
+      navigate(ADMIN_ROLES.includes(res.data.role) ? '/admin' : '/catalog')
     } catch (err: any) {
       setError(err.response?.data?.message || 'Correo o contraseña incorrectos')
     } finally {
@@ -37,209 +42,73 @@ export default function LoginPage() {
     try {
       await authApi.register(email, password, fullName)
       setTab('login')
-      setError('')
-      alert('Registro exitoso, podés iniciar sesión')
+      toast.success('Registro exitoso, ya podés iniciar sesión')
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Error al registrarse')
+      setError(err.response?.data?.message || 'No se pudo completar el registro')
     } finally {
       setLoading(false)
     }
   }
 
+  const switchTab = (next: 'login' | 'register') => { setTab(next); setError('') }
+
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        {/* Logo / Header */}
-        <div style={styles.header}>
-          <div style={styles.logo}>🎓</div>
-          <h1 style={styles.title}>YoUSAC</h1>
-          <p style={styles.subtitle}>Plataforma de Video Académico</p>
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="auth-logo">Yo</div>
+          <h1>YoUSAC</h1>
+          <p className="subtitle">Plataforma de video académico · USAC</p>
         </div>
 
-        {/* Tabs */}
-        <div style={styles.tabs}>
-          <button
-            style={{ ...styles.tab, ...(tab === 'login' ? styles.tabActive : {}) }}
-            onClick={() => { setTab('login'); setError('') }}
-          >
-            Iniciar Sesión
+        <div className="auth-tabs">
+          <button className={tab === 'login' ? 'is-active' : ''} onClick={() => switchTab('login')}>
+            Iniciar sesión
           </button>
-          <button
-            style={{ ...styles.tab, ...(tab === 'register' ? styles.tabActive : {}) }}
-            onClick={() => { setTab('register'); setError('') }}
-          >
+          <button className={tab === 'register' ? 'is-active' : ''} onClick={() => switchTab('register')}>
             Registrarse
           </button>
         </div>
 
-        {/* Error */}
-        {error && <div className="error-msg" style={{ marginBottom: 16 }}>{error}</div>}
+        {error && <div className="alert alert-error" style={{ marginBottom: 14 }}>{error}</div>}
 
-        {/* Login Form */}
-        {tab === 'login' && (
-          <form onSubmit={handleLogin} style={styles.form}>
-            <div style={styles.field}>
-              <label style={styles.label}>Correo institucional</label>
-              <input
-                type="email"
-                placeholder="correo@ingenieria.usac.edu.gt"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
+        <form onSubmit={tab === 'login' ? handleLogin : handleRegister}>
+          {tab === 'register' && (
+            <div className="field">
+              <label className="field-label">Nombre completo</label>
+              <input value={fullName} onChange={e => setFullName(e.target.value)}
+                placeholder="Diego González" required />
             </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Contraseña</label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: '100%', marginTop: 8, padding: '12px' }}
-              disabled={loading}
-            >
-              {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
-            </button>
-          </form>
-        )}
+          )}
 
-        {/* Register Form */}
+          <div className="field">
+            <label className="field-label">Correo institucional</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="usuario@ingenieria.usac.edu.gt" required />
+          </div>
+
+          <div className="field">
+            <label className="field-label">Contraseña</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••" required />
+          </div>
+
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 4 }}
+            disabled={loading}>
+            {loading
+              ? <><span className="spinner" /> Procesando…</>
+              : tab === 'login' ? 'Entrar' : 'Crear cuenta'}
+          </button>
+        </form>
+
         {tab === 'register' && (
-          <form onSubmit={handleRegister} style={styles.form}>
-            <div style={styles.field}>
-              <label style={styles.label}>Nombre completo</label>
-              <input
-                type="text"
-                placeholder="Juan García"
-                value={fullName}
-                onChange={e => setFullName(e.target.value)}
-                required
-              />
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Correo institucional</label>
-              <input
-                type="email"
-                placeholder="correo@ingenieria.usac.edu.gt"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>Contraseña</label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: '100%', marginTop: 8, padding: '12px' }}
-              disabled={loading}
-            >
-              {loading ? 'Registrando...' : 'Crear cuenta'}
-            </button>
-          </form>
+          <p className="subtitle text-center" style={{ marginTop: 14, fontSize: 12 }}>
+            Solo se admiten correos de los dominios
+            <br />
+            <strong>@ingenieria.usac.edu.gt</strong> y <strong>@ing.usac.edu.gt</strong>
+          </p>
         )}
-
-        <p style={styles.footer}>
-          Acceso exclusivo con correo institucional de Ingeniería USAC
-        </p>
       </div>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: '#0f172a',
-    padding: 20,
-  },
-  card: {
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderRadius: 16,
-    padding: '40px 36px',
-    width: '100%',
-    maxWidth: 420,
-  },
-  header: {
-    textAlign: 'center',
-    marginBottom: 28,
-  },
-  logo: {
-    fontSize: 48,
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 700,
-    color: '#f1f5f9',
-    letterSpacing: '-0.5px',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#64748b',
-    marginTop: 4,
-  },
-  tabs: {
-    display: 'flex',
-    background: '#0f172a',
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 24,
-    gap: 4,
-  },
-  tab: {
-    flex: 1,
-    padding: '8px 12px',
-    border: 'none',
-    borderRadius: 8,
-    background: 'transparent',
-    color: '#64748b',
-    fontSize: 14,
-    cursor: 'pointer',
-    fontWeight: 500,
-    transition: 'all 0.2s',
-  },
-  tabActive: {
-    background: '#1e293b',
-    color: '#f1f5f9',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16,
-  },
-  field: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
-  label: {
-    fontSize: 13,
-    color: '#94a3b8',
-    fontWeight: 500,
-  },
-  footer: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#475569',
-    marginTop: 24,
-  },
 }
