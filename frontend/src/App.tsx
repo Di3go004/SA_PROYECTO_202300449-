@@ -13,10 +13,15 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
 }
 
+// Práctica 3: el panel lo comparten los tres roles administrativos. Esta guarda
+// solo evita mostrar una pantalla que el usuario no podría usar; la autorización
+// real la aplican el api-gateway y los guards gRPC de cada microservicio.
+const ADMIN_ROLES = ['administrador', 'catedratico', 'auxiliar']
+
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated } = useAuth()
   if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (user?.role !== 'administrador') return <Navigate to="/catalog" replace />
+  if (!ADMIN_ROLES.includes(user?.role || '')) return <Navigate to="/catalog" replace />
   return <>{children}</>
 }
 
