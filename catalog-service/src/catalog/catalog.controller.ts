@@ -14,16 +14,28 @@ export class CatalogController {
   @GrpcMethod('CatalogService', 'GetCatalog')
   async getCatalog(data: any) {
     const user = { sub: data.__user.sub, role: data.__user.role };
+
+    // proto3 entrega 0 / '' para los escalares ausentes; la función SQL espera
+    // NULL para "sin filtro", así que la conversión se hace acá una sola vez.
+    const num = (v: any) => (v ? Number(v) : null);
+    const str = (v: any) => (v && String(v).trim() !== '' ? String(v).trim() : null);
+
     const filters = {
-      semester: data.semester || undefined,
-      year: data.year || undefined,
-      schoolId: data.school_id || undefined,
-      courseId: data.course_id || undefined,
-      teacherId: data.teacher_id || undefined,
-      tag: data.tag || undefined,
-      search: data.search || undefined,
+      semester:   str(data.semester),
+      semesterId: num(data.semester_id),
+      year:       num(data.year),
+      schoolId:   num(data.school_id),
+      courseId:   num(data.course_id),
+      teacherId:  num(data.teacher_id),
+      tag:        str(data.tag),
+      search:     str(data.search),
     };
-    const pagination = { page: data.page || 1, limit: data.limit || 20 };
+
+    const pagination = {
+      page: data.page || 1,
+      limit: data.limit || CatalogService.MAX_PAGE_SIZE,
+    };
+
     const result = await this.catalogService.getCatalog(user, filters, pagination);
     return { json: JSON.stringify(result) };
   }
