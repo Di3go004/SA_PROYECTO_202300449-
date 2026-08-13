@@ -99,7 +99,10 @@ services:
     networks:
       - yousac-network
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      # 127.0.0.1 y no localhost: dentro del contenedor localhost resuelve a ::1
+      # y nginx solo escucha en IPv4, con lo que el healthcheck fallaba pese a
+      # que el servicio respondia correctamente.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/health"]
       interval: 15s
       timeout: 5s
       retries: 3
