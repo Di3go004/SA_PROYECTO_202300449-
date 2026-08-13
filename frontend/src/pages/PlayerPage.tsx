@@ -38,6 +38,10 @@ export default function PlayerPage() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState('')
 
+  // Un <video> con una fuente inalcanzable no lanza nada visible: se queda en
+  // negro sin mensaje. Se captura onError para poder explicar qué pasó.
+  const [videoError, setVideoError] = useState(false)
+
   const [stars, setStars]         = useState(0)
   const [hoverStar, setHoverStar] = useState(0)
   const [comment, setComment]     = useState('')
@@ -167,14 +171,24 @@ export default function PlayerPage() {
             src={recording?.video_url}
             controls
             style={{ width: '100%', display: 'block', aspectRatio: '16 / 9', background: '#000' }}
-            onLoadedMetadata={handleVideoLoad}
+            onLoadedMetadata={() => { setVideoError(false); handleVideoLoad() }}
+            onError={() => setVideoError(true)}
             onPlay={handlePlay}
             onPause={handlePause}
             onEnded={handlePause}
           />
         </div>
 
-        {startPos > 0 && (
+        {videoError && (
+          <div className="alert alert-error">
+            <strong>No se pudo cargar el archivo de video.</strong>{' '}
+            La grabación existe en el catálogo, pero su archivo no está disponible en{' '}
+            <code>{recording?.video_url}</code>. Verificá que el servidor de medios esté
+            levantado (<code>media-server</code> en el compose) o que la URL registrada sea correcta.
+          </div>
+        )}
+
+        {startPos > 0 && !videoError && (
           <div className="alert alert-info">
             Se reanudó la reproducción desde el minuto {Math.floor(startPos / 60)}:
             {String(Math.floor(startPos % 60)).padStart(2, '0')}.

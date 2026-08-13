@@ -21,3 +21,6 @@ venv/
 .vscode/
 *.swp
 .claude
+
+# Los .mp4 de media/videos SÍ se versionan: son datos de demo y sin ellos el
+# reproductor queda sin nada que servir.
