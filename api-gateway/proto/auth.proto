@@ -13,6 +13,19 @@ service AuthService {
   rpc GetUserById (GetUserByIdRequest) returns (JsonResponse);
   rpc AssignRole  (AssignRoleRequest)  returns (MessageResponse);
   rpc ToggleBlock (ToggleBlockRequest) returns (MessageResponse);
+
+  // ── Panel administrativo (Práctica 3) ──────────────────────────────────
+  // GetRoles alimenta el selector de roles del panel (hasta ahora el frontend
+  // tenía los ids hardcodeados). ListTeachers devuelve los usuarios con rol
+  // catedratico/auxiliar: son los "Docentes" que administra el panel y los
+  // candidatos a asignarse a un curso, que vive en la otra base de datos.
+  rpc GetRoles     (Empty) returns (JsonResponse);
+  rpc ListTeachers (Empty) returns (JsonResponse);
+
+  // Consumida por catalog-service (no por el gateway): el CSV identifica al
+  // docente por correo, pero las grabaciones se guardan con teacher_id, y los
+  // usuarios viven en esta base. Es tráfico gRPC entre microservicios.
+  rpc ResolveTeachersByEmail (ResolveTeachersRequest) returns (JsonResponse);
 }
 
 message Empty {}
@@ -53,3 +66,7 @@ message ToggleBlockRequest {
   int32 user_id = 1;
   bool  blocked = 2;
 }
+
+// Se resuelven todos los correos del archivo de una sola vez, no uno por fila:
+// un CSV de N filas provoca una única llamada gRPC, no N.
+message ResolveTeachersRequest { repeated string emails = 1; }
