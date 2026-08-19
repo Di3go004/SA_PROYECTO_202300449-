@@ -83,6 +83,27 @@ services:
       retries: 5
       start_period: 60s
 
+  # ── CACHÉ ────────────────────────────────────────────────────
+  # Redis sirve las consultas más repetidas del catálogo y las tendencias, para
+  # que los picos de concurrencia en época de exámenes no golpeen MySQL.
+
+  redis:
+    build:
+      context: ./redis
+      dockerfile: Dockerfile
+    container_name: yousac_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # ── SERVIDOR DE MEDIOS ───────────────────────────────────────
   # Sirve los .mp4 de ejemplo para que el reproductor tenga archivos reales.
   # En producción sería un CDN; acá evita que la demo dependa de internet.
@@ -213,6 +234,9 @@ services:
       MYSQL_PASSWORD: yousac_secret
       GRPC_REPRODUCTION_HOST: reproduction-service
       GRPC_REPRODUCTION_PORT: 50051
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
       GRPC_PORT: 50054
       HTTP_PORT: 3002
       ENV: development
@@ -225,6 +249,8 @@ services:
       mysql-db:
         condition: service_healthy
       reproduction-service:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3002/health')"]

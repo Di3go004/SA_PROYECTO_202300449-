@@ -598,5 +598,51 @@ jsonIdRoute('get', '/api/analytics/reports/course/:course_id/progress', analytic
 jsonIdRoute('get', '/api/analytics/reports/engagement/:video_id', analyticsClient, 'GetVideoEngagement',
   req => ({ id: parseInt(req.params.video_id) }), 'Error al obtener engagement del video');
 
+// ── Tendencias servidas desde Redis ────────────────────────────────────────
+// Estas RPC devuelven CachedResponse, que además del payload informa si el dato
+// salió de la caché. Se expone como cabecera X-Cache para poder demostrar que
+// Redis está sirviendo tráfico real: la primera petición responde MISS y las
+// siguientes HIT hasta que expire el TTL.
+function trendRoute(path_, rpcMethod, buildRequest, fallbackMessage) {
+  app.get(path_, validateJWT, async (req, res) => {
+    try {
+      const result = await callGrpc(analyticsClient, rpcMethod, buildRequest(req), buildMetadata(req));
+      res.set('X-Cache', result.from_cache ? 'HIT' : 'MISS');
+      res.set('X-Cache-TTL', String(result.ttl_seconds || 0));
+      res.json({
+        data: JSON.parse(result.json),
+        cached: result.from_cache,
+        ttl_seconds: result.ttl_seconds,
+      });
+    } catch (err) {
+      handleGrpcError(err, res, fallbackMessage);
+    }
+  });
+}
+
+trendRoute('/api/analytics/trends/weekly-top', 'GetWeeklyTopVideos',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener las clases más vistas de la semana');
+
+trendRoute('/api/analytics/trends/top-rated', 'GetTopRatedVideos',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener el ranking de clases mejor valoradas');
+
+trendRoute('/api/analytics/trends/courses', 'GetTrendingCourses',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener los cursos en tendencia');
+
+// Estado de la caché: es la evidencia que se muestra en la sustentación.
+jsonIdRoute('get', '/api/analytics/cache/stats', analyticsClient, 'GetCacheStats',
+  () => ({}), 'Error al obtener el estado de la caché');
+
+// Fuerza la instantánea semanal e invalida los rankings. Reservado a los roles
+// administrativos porque reescribe la serie temporal que alimenta las tendencias.
+app.post('/api/analytics/trends/snapshot', validateJWT, requireAdminRole, async (req, res) => {
+  try {
+    const result = await callGrpc(analyticsClient, 'SnapshotWeeklyViews', {}, buildMetadata(req));
+    res.json(JSON.parse(result.json));
+  } catch (err) {
+    handleGrpcError(err, res, 'Error al tomar la instantánea semanal');
+  }
+});
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`✅ API Gateway (REST↔gRPC) corriendo en puerto ${PORT}`));
