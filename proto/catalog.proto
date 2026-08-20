@@ -37,6 +37,11 @@ service CatalogService {
   rpc AssignTeacher      (TeacherAssignmentRequest)  returns (MessageResponse);
   rpc UnassignTeacher    (TeacherAssignmentRequest)  returns (MessageResponse);
 
+  // Publicación de grabaciones. Al publicar, catalog-service avisa por gRPC a
+  // notification-service para que informe a los estudiantes inscritos.
+  rpc ListUnpublishedRecordings (Empty)          returns (JsonResponse);
+  rpc SetRecordingPublished     (PublishRequest) returns (MessageResponse);
+
   // Ingesta masiva. El archivo viaja como texto y se parsea acá dentro: el
   // gateway solo recibe el multipart y no interpreta el dominio.
   rpc BulkImportRecordings (BulkImportRequest) returns (JsonResponse);
@@ -128,6 +133,11 @@ message ListCoursesRequest {
 message TeacherAssignmentRequest {
   int32 teacher_id = 1;
   int32 course_id  = 2;
+}
+
+message PublishRequest {
+  int32 recording_id = 1;
+  bool  published    = 2;
 }
 
 // El id de quien sube el archivo NO viaja en el request: se toma del JWT que ya

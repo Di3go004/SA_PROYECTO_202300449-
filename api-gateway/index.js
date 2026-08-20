@@ -426,6 +426,16 @@ adminRoute('delete', '/api/admin/courses/:id/teachers/:teacher_id', catalogClien
     teacher_id: parseInt(req.params.teacher_id),
   }), 'Error al desasignar docente');
 
+// ── Publicación de grabaciones ─────────────────────────────────────────────
+adminRoute('get', '/api/admin/recordings/unpublished', catalogClient, 'ListUnpublishedRecordings',
+  () => ({}), 'Error al obtener las grabaciones sin publicar', { json: true });
+
+adminRoute('put', '/api/admin/recordings/:id/publish', catalogClient, 'SetRecordingPublished',
+  req => ({
+    recording_id: parseInt(req.params.id),
+    published: req.body.published !== false,
+  }), 'Error al publicar la grabación');
+
 // ── Ingesta masiva CSV ─────────────────────────────────────────────────────
 // El archivo se recibe en memoria y NO se escribe a disco: se reenvía como
 // texto por gRPC y catalog-service lo parsea. El gateway no interpreta el
