@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { AuthGrpcClient } from '../common/auth-grpc.client';
+import { NotificationsGrpcClient } from '../common/notifications-grpc.client';
 
 @Module({
   imports: [
@@ -11,6 +13,6 @@ import { AdminService } from './admin.service';
     }),
   ],
   controllers: [AdminController],
-  providers: [AdminService],
+  providers: [AdminService, AuthGrpcClient, NotificationsGrpcClient],
 })
 export class AdminModule {}

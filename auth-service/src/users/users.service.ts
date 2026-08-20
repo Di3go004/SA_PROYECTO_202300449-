@@ -75,6 +75,26 @@ export class UsersService {
     return result.rows;
   }
 
+  // Correos de los estudiantes a los que hay que avisar cuando se publica una
+  // grabación. Filtra a los bloqueados: una cuenta suspendida no debe recibir
+  // avisos de la plataforma.
+  async resolveStudentEmails(studentIds: number[]) {
+    if (!studentIds?.length) return [];
+
+    const ids = studentIds.filter((id) => Number.isInteger(id) && id > 0);
+    if (!ids.length) return [];
+
+    const result = await this.db.authQuery(
+      `SELECT id, email, full_name
+         FROM vw_users_with_role
+        WHERE id = ANY($1::INT[])
+          AND is_active = TRUE
+          AND is_blocked = FALSE`,
+      [ids],
+    );
+    return result.rows;
+  }
+
   async listTeachers() {
     const result = await this.db.authQuery(
       `SELECT id, email, full_name, role_name, is_active, is_blocked

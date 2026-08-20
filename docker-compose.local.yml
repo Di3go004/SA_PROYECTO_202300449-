@@ -27,6 +27,7 @@ services:
       # SPs de la Práctica 3: van al final porque dependen de las tablas de 02.
       - ./DB/practica3_sps.sql:/docker-entrypoint-initdb.d/03_practica3_sps.sql
       - ./DB/notifications_db.sql:/docker-entrypoint-initdb.d/04_notifications.sql
+      - ./DB/proyecto_fase1_sps.sql:/docker-entrypoint-initdb.d/05_proyecto_sps.sql
     ports:
       - "5432:5432"
     networks:
@@ -207,6 +208,8 @@ services:
       # La carga masiva resuelve correo→teacher_id llamando a auth-service por
       # gRPC: los usuarios viven en la otra base y este servicio no la toca.
       AUTH_GRPC_URL: auth-service:50052
+      # Al publicar una grabación avisa a los estudiantes inscritos.
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
       GRPC_PORT: 50053
       PORT: 3003
       NODE_ENV: development

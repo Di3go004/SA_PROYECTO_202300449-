@@ -7,10 +7,16 @@
 // dependientes viven en la base, no duplicadas en TypeScript.
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { CatalogDatabaseService } from '../common/database.service';
+import { AuthGrpcClient } from '../common/auth-grpc.client';
+import { NotificationsGrpcClient } from '../common/notifications-grpc.client';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly db: CatalogDatabaseService) {}
+  constructor(
+    private readonly db: CatalogDatabaseService,
+    private readonly authClient: AuthGrpcClient,
+    private readonly notificationsClient: NotificationsGrpcClient,
+  ) {}
 
   // Los SPs comunican los errores de negocio con RAISE EXCEPTION. Se traducen a
   // BadRequest (→ INVALID_ARGUMENT en gRPC) para que el mensaje del SP llegue
@@ -139,5 +145,68 @@ export class AdminService {
   async unassignTeacher(teacherId: number, courseId: number) {
     await this.callSp('CALL sp_unassign_teacher_from_course($1, $2)', [teacherId, courseId]);
     return { message: 'Docente desasignado exitosamente' };
+  }
+
+  // ── Publicación de grabaciones ───────────────────────────────────────────
+
+  async listUnpublished() {
+    const result = await this.db.query('SELECT * FROM vw_unpublished_recordings');
+    return result.rows;
+  }
+
+  /**
+   * Publica (o despublica) una grabación y avisa por correo a los inscritos.
+   *
+   * El aviso solo se dispara al publicar, nunca al despublicar, y se hace
+   * después de que la escritura ya está confirmada: si el servicio de
+   * notificaciones falla, la grabación queda publicada igual.
+   */
+  async setPublished(
+    recordingId: number,
+    published: boolean,
+    userToken: string,
+  ) {
+    const result = await this.callSp(
+      'SELECT * FROM fn_set_recording_published($1, $2)',
+      [recordingId, published],
+    );
+    const grabacion = result.rows[0];
+
+    if (!published) {
+      return { message: 'Grabación despublicada', notificados: 0 };
+    }
+
+    let notificados = 0;
+    try {
+      const inscritos = await this.db.query(
+        'SELECT * FROM fn_get_enrolled_student_ids($1)',
+        [grabacion.course_id],
+      );
+      const ids = inscritos.rows.map((f: any) => f.student_id);
+
+      if (ids.length > 0) {
+        const estudiantes = await this.authClient.resolveStudentEmails(ids, userToken);
+        const docente = await this.authClient.resolveStudentEmails([grabacion.teacher_id], userToken);
+
+        this.notificationsClient.notifyNewRecording({
+          recordingId: grabacion.recording_id,
+          title: grabacion.title,
+          courseName: grabacion.course_name,
+          courseCode: grabacion.course_code,
+          teacherName: docente[0]?.full_name || '',
+          recipients: estudiantes.map((e) => e.email),
+        });
+        notificados = estudiantes.length;
+      }
+    } catch (error: any) {
+      // El aviso es accesorio: se registra el problema pero la publicación se
+      // mantiene, porque ya ocurrió y revertirla sería peor que no avisar.
+      console.warn(`⚠️  Grabación ${recordingId} publicada, pero falló el aviso: ${error.message}`);
+    }
+
+    return {
+      message: 'Grabación publicada exitosamente',
+      notificados,
+    };
   }
 }
