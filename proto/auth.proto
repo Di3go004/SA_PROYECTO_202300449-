@@ -26,6 +26,11 @@ service AuthService {
   // docente por correo, pero las grabaciones se guardan con teacher_id, y los
   // usuarios viven en esta base. Es tráfico gRPC entre microservicios.
   rpc ResolveTeachersByEmail (ResolveTeachersRequest) returns (JsonResponse);
+
+  // Consumida por catalog-service al publicar una grabación: necesita avisar a
+  // los estudiantes inscritos, pero solo conoce sus student_id — los correos
+  // viven en esta base.
+  rpc ResolveStudentEmails   (StudentIdsRequest)     returns (JsonResponse);
 }
 
 message Empty {}
@@ -70,3 +75,7 @@ message ToggleBlockRequest {
 // Se resuelven todos los correos del archivo de una sola vez, no uno por fila:
 // un CSV de N filas provoca una única llamada gRPC, no N.
 message ResolveTeachersRequest { repeated string emails = 1; }
+
+// Se resuelven todos los ids de una vez y no uno por estudiante: un curso con
+// cien inscritos provoca una única llamada gRPC, no cien.
+message StudentIdsRequest { repeated int32 student_ids = 1; }

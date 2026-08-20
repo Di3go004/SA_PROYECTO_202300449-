@@ -63,6 +63,15 @@ export class UsersController {
     return { json: JSON.stringify(await this.usersService.listTeachers()) };
   }
 
+  // La consume catalog-service al publicar una grabación: necesita avisar a los
+  // inscritos pero solo conoce sus student_id.
+  @GrpcMethod('AuthService', 'ResolveStudentEmails')
+  @Roles('administrador', 'catedratico', 'auxiliar')
+  async resolveStudentEmails(data: { student_ids: number[] }) {
+    const estudiantes = await this.usersService.resolveStudentEmails(data.student_ids || []);
+    return { json: JSON.stringify(estudiantes) };
+  }
+
   // La consume catalog-service durante la carga masiva, reenviando el JWT del
   // usuario que subió el archivo: la llamada entre microservicios no viaja
   // anónima ni con credenciales de servicio, sigue sujeta al mismo RBAC.

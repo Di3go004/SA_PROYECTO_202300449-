@@ -128,6 +128,22 @@ export class AdminController {
     return this.adminService.assignTeacher(data.teacher_id, data.course_id);
   }
 
+  // ── Publicación de grabaciones ───────────────────────────────────────────
+
+  @GrpcMethod('CatalogService', 'ListUnpublishedRecordings')
+  @Roles(...ADMIN_ROLES)
+  async listUnpublished() {
+    return { json: JSON.stringify(await this.adminService.listUnpublished()) };
+  }
+
+  @GrpcMethod('CatalogService', 'SetRecordingPublished')
+  @Roles(...ADMIN_ROLES)
+  async setPublished(data: { recording_id: number; published: boolean; __token?: string }) {
+    // El token se reenvía a auth-service para resolver los correos de los
+    // inscritos: la llamada interna viaja con la identidad real del usuario.
+    return this.adminService.setPublished(data.recording_id, data.published, data.__token);
+  }
+
   @GrpcMethod('CatalogService', 'UnassignTeacher')
   @Roles(...ADMIN_ROLES)
   async unassignTeacher(data: { teacher_id: number; course_id: number }) {
