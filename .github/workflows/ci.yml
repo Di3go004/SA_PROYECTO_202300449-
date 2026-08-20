@@ -1,0 +1,269 @@
+# .github/workflows/ci.yml
+# Integración continua de YoUSAC.
+#
+# Un backend políglota no se puede validar con un solo comando: cada lenguaje
+# trae su propia cadena de herramientas. Por eso el pipeline se divide en un job
+# por familia, que además corren en paralelo, y un job final que solo se ejecuta
+# si todos los anteriores pasaron.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+
+  # ── Contratos gRPC ─────────────────────────────────────────
+  # Los .proto están duplicados por servicio (cada imagen necesita los suyos en
+  # su contexto de build). Ese duplicado es la parte más fácil de desincronizar
+  # del repositorio, así que se verifica en cada push.
+  contratos:
+    name: Contratos .proto sincronizados
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar que las copias coincidan con proto/
+        run: |
+          fallos=0
+          verificar() {
+            if [ -f "$2" ] && ! diff -q "$1" "$2" > /dev/null; then
+              echo "::error file=$2::Desincronizado respecto de $1"
+              fallos=1
+            fi
+          }
+          verificar proto/auth.proto          auth-service/proto/auth.proto
+          verificar proto/auth.proto          api-gateway/proto/auth.proto
+          verificar proto/auth.proto          catalog-service/proto/auth.proto
+          verificar proto/catalog.proto       catalog-service/proto/catalog.proto
+          verificar proto/catalog.proto       api-gateway/proto/catalog.proto
+          verificar proto/analytics.proto     analytics-service/proto/analytics.proto
+          verificar proto/analytics.proto     api-gateway/proto/analytics.proto
+          verificar proto/checkpoints.proto   api-gateway/proto/checkpoints.proto
+          verificar proto/notifications.proto notification-service/proto/notifications.proto
+          verificar proto/notifications.proto auth-service/proto/notifications.proto
+          verificar proto/notifications.proto catalog-service/proto/notifications.proto
+          verificar proto/notifications.proto api-gateway/proto/notifications.proto
+          exit $fallos
+
+  # ── TypeScript ─────────────────────────────────────────────
+  typescript:
+    name: TypeScript · ${{ matrix.servicio }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # que un servicio roto no oculte el estado de los demás
+      matrix:
+        servicio: [auth-service, catalog-service, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: ${{ matrix.servicio }}/pnpm-lock.yaml
+
+      - name: Instalar dependencias
+        working-directory: ${{ matrix.servicio }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Verificación de tipos
+        working-directory: ${{ matrix.servicio }}
+        run: npx tsc --noEmit
+
+      - name: Compilar
+        working-directory: ${{ matrix.servicio }}
+        run: pnpm run build
+
+  # ── Node (API Gateway) ─────────────────────────────────────
+  # Va aparte de la matriz anterior: usa npm y no tiene compilación, solo
+  # verificación de sintaxis.
+  gateway:
+    name: API Gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api-gateway/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: api-gateway
+        run: npm ci
+
+      - name: Verificar sintaxis
+        working-directory: api-gateway
+        run: node --check index.js
+
+      - name: Verificar que los .proto carguen
+        working-directory: api-gateway
+        run: |
+          node -e "
+            const path = require('path');
+            const protoLoader = require('@grpc/proto-loader');
+            const grpc = require('@grpc/grpc-js');
+            for (const f of ['auth.proto','catalog.proto','checkpoints.proto','analytics.proto','notifications.proto']) {
+              const def = protoLoader.loadSync(path.join('proto', f), { keepCase: true, defaults: true });
+              grpc.loadPackageDefinition(def);
+              console.log('OK', f);
+            }
+          "
+
+  # ── Python ─────────────────────────────────────────────────
+  python:
+    name: Python · ${{ matrix.servicio }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        servicio: [analytics-service, notification-service]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ${{ matrix.servicio }}/requirements.txt
+
+      - name: Instalar dependencias
+        working-directory: ${{ matrix.servicio }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compilar todos los módulos
+        working-directory: ${{ matrix.servicio }}
+        run: python -m compileall -q app
+
+      - name: Verificar que la aplicación importe
+        working-directory: ${{ matrix.servicio }}
+        run: python -c "import app.main; print('import OK')"
+
+  # ── Go ─────────────────────────────────────────────────────
+  go:
+    name: Go · reproduction-service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Debe coincidir con la directiva `go` de go.mod y con la imagen del
+          # Dockerfile; una versión menor hace fallar el toolchain.
+          go-version: '1.25'
+          cache-dependency-path: reproduction-service/go.sum
+
+      - name: Verificar formato
+        working-directory: reproduction-service
+        run: |
+          sin_formato=$(gofmt -l . | grep -v '^proto/' || true)
+          if [ -n "$sin_formato" ]; then
+            echo "::error::Archivos sin gofmt:"; echo "$sin_formato"; exit 1
+          fi
+
+      - name: Analizar
+        working-directory: reproduction-service
+        run: go vet ./...
+
+      - name: Compilar
+        working-directory: reproduction-service
+        run: go build -v ./...
+
+  # ── Orquestación ───────────────────────────────────────────
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar el entorno local
+        run: docker compose -f docker-compose.local.yml config --quiet
+
+      - name: Validar el entorno de nube
+        # El de nube aborta si falta una variable, que es justamente lo que se
+        # quiere verificar. Se le pasa el .env.example para comprobar que la
+        # plantilla cubre todas las variables que el archivo exige.
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.cloud.yml config --quiet
+          rm .env
+
+      - name: Verificar que ningún compose traiga credenciales sueltas
+        run: |
+          if grep -nE ':[[:space:]]*(yousac_secret|yousac_root|supersecreto)' docker-compose.*.yml; then
+            echo "::error::Hay credenciales literales fuera de un valor por defecto"
+            exit 1
+          fi
+          echo "Sin credenciales sueltas"
+
+      - name: Verificar que .env no esté versionado
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::El archivo .env está versionado y no debería"
+            exit 1
+          fi
+          echo ".env correctamente ignorado"
+
+  # ── Imágenes ───────────────────────────────────────────────
+  # Solo se construyen si todo lo anterior pasó: compilar doce imágenes es lo más
+  # lento del pipeline y no tiene sentido hacerlo sobre código que ya falló.
+  imagenes:
+    name: Construir imágenes
+    runs-on: ubuntu-latest
+    needs: [contratos, typescript, gateway, python, go, compose]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { nombre: auth-service,          contexto: ./auth-service,         dockerfile: Dockerfile }
+          - { nombre: catalog-service,       contexto: ./catalog-service,      dockerfile: Dockerfile }
+          - { nombre: reproduction-service,  contexto: ./reproduction-service, dockerfile: Dockerfile }
+          - { nombre: analytics-service,     contexto: ./analytics-service,    dockerfile: Dockerfile }
+          - { nombre: notification-service,  contexto: ./notification-service, dockerfile: Dockerfile }
+          - { nombre: api-gateway,           contexto: ./api-gateway,          dockerfile: Dockerfile }
+          - { nombre: frontend,              contexto: ./frontend,             dockerfile: Dockerfile }
+          - { nombre: redis,                 contexto: ./redis,                dockerfile: Dockerfile }
+          - { nombre: media-server,          contexto: ./media,                dockerfile: Dockerfile }
+          - { nombre: postgres,              contexto: ./DB,   dockerfile: docker/postgres/Dockerfile }
+          - { nombre: mysql,                 contexto: ./DB,   dockerfile: docker/mysql/Dockerfile }
+          - { nombre: mongo,                 contexto: ./DB,   dockerfile: docker/mongo/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construir ${{ matrix.nombre }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.contexto }}
+          file: ${{ matrix.contexto }}/${{ matrix.dockerfile }}
+          push: false
+          tags: yousac/${{ matrix.nombre }}:ci
+          cache-from: type=gha,scope=${{ matrix.nombre }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.nombre }}
+
+  # ── Resultado ──────────────────────────────────────────────
+  resultado:
+    name: Resultado de la integración
+    runs-on: ubuntu-latest
+    needs: [contratos, typescript, gateway, python, go, compose, imagenes]
+    if: always()
+    steps:
+      - name: Verificar que ningún job haya fallado
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ]; then
+            echo "::error::Al menos un job falló"
+            exit 1
+          fi
+          echo "Integración correcta: contratos, servicios, orquestación e imágenes"

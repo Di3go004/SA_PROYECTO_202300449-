@@ -224,7 +224,7 @@ git clone https://github.com/Di3go004/SA_PROYECTO_202300449-.git
 cd SA_PROYECTO_202300449-
 
 # Crear el archivo de variables a partir de la plantilla
-cp .env.cloud.example .env
+cp .env.example .env
 
 # Editarlo con los valores reales
 nano .env
@@ -234,9 +234,12 @@ Valores que hay que ajustar sí o sí:
 
 | Variable | Qué poner |
 |---|---|
-| `PUBLIC_IP` | La IP externa de la VM |
-| `JWT_SECRET` | Una cadena larga y aleatoria, distinta a la de local |
-| `POSTGRES_PASSWORD` / `MYSQL_PASSWORD` / `MONGO_PASSWORD` | Contraseñas propias |
+| `PUBLIC_HOST` | La IP externa de la VM |
+| `APP_PUBLIC_URL` | `http://IP_EXTERNA:5173` |
+| `CORS_ORIGIN` | `http://IP_EXTERNA:5173` |
+| `VITE_API_URL` | `http://IP_EXTERNA:8080` |
+| `JWT_SECRET` | Una cadena larga y aleatoria: `openssl rand -base64 48` |
+| `POSTGRES_PASSWORD` / `MYSQL_PASSWORD` / `MONGO_PASSWORD` / `MYSQL_ROOT_PASSWORD` | Contraseñas propias |
 | `SMTP_USER` / `SMTP_PASSWORD` | Tu correo y la contraseña de aplicación de Gmail |
 
 Guardá con `Ctrl+O`, `Enter`, `Ctrl+X`. Luego:

@@ -1,7 +1,14 @@
+# Variables de entorno: contienen contraseñas, secretos y URLs de despliegue.
+# Solo se versiona .env.example, con la lista de variables y valores de muestra.
+.env
+.env.local
+.env.cloud
+.env.*.local
+!.env.example
+
 # Node
 node_modules/
 dist/
-.env
 
 # Go
 *.exe
