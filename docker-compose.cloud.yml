@@ -1,0 +1,408 @@
+# ============================================================
+# YoUSAC — Orquestación del entorno en la nube (Google Cloud Platform)
+#
+# Diferencias con docker-compose.local.yml:
+#
+#  · Sin valores por defecto. Toda credencial se toma del .env con la sintaxis
+#    ${VAR:?mensaje}, que aborta el despliegue si falta en vez de arrancar con
+#    una contraseña de desarrollo.
+#  · Las bases de datos y la caché NO publican puertos al exterior: solo se
+#    alcanzan dentro de la red interna. Exponer 5432 o 27017 a internet sería un
+#    agujero innecesario.
+#  · restart: always en lugar de unless-stopped, para que los servicios vuelvan
+#    tras un reinicio de la VM.
+#  · Volúmenes con nombre para la persistencia y límites de memoria por servicio,
+#    de modo que un contenedor no pueda agotar la RAM de la máquina.
+#  · Las imágenes se construyen desde los Dockerfile propios de cada componente,
+#    bases de datos incluidas, en vez de montar los .sql como volumen.
+#
+# Uso:
+#     cp .env.example .env     # y completar con los valores de producción
+#     docker compose -f docker-compose.cloud.yml up -d --build
+# ============================================================
+
+networks:
+  yousac-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  mysql_data:
+  redis_data:
+
+services:
+
+  # ── BASES DE DATOS ───────────────────────────────────────────
+  # Sin `ports`: solo accesibles desde la red interna de Docker.
+
+  postgres-db:
+    build:
+      context: ./DB
+      dockerfile: docker/postgres/Dockerfile
+    container_name: yousac_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  mongodb:
+    build:
+      context: ./DB
+      dockerfile: docker/mongo/Dockerfile
+    container_name: yousac_mongodb
+    restart: always
+    command: ["mongod", "--quiet"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:?falta MONGO_USER en .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?falta MONGO_PASSWORD en .env}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-yousac_reproduction_db}
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok", "--json", "relaxed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  mysql-db:
+    build:
+      context: ./DB
+      dockerfile: docker/mysql/Dockerfile
+    container_name: yousac_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-yousac_analytics_db}
+      MYSQL_USER: ${MYSQL_USER:?falta MYSQL_USER en .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?falta MYSQL_PASSWORD en .env}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "-p${MYSQL_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1500m
+
+  # ── CACHÉ ────────────────────────────────────────────────────
+
+  redis:
+    build:
+      context: ./redis
+      dockerfile: Dockerfile
+    container_name: yousac_redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  # ── SERVIDOR DE MEDIOS ───────────────────────────────────────
+
+  media-server:
+    build:
+      context: ./media
+      dockerfile: Dockerfile
+    container_name: yousac_media
+    restart: always
+    ports:
+      - "8081:80"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ── MICROSERVICIOS (tráfico interno: solo gRPC) ──────────────
+  # Sin `ports`: el api-gateway es el único punto de entrada, tal como exige el
+  # enunciado. Sus puertos gRPC quedan accesibles solo dentro de la red.
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: yousac_auth
+    restart: always
+    environment:
+      AUTH_DB_HOST: postgres-db
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: yousac_auth_db
+      AUTH_DB_USER: ${POSTGRES_USER}
+      AUTH_DB_PASS: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en .env}
+      JWT_TTL: ${JWT_TTL:-8h}
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
+      GRPC_PORT: 50052
+      PORT: 3000
+      NODE_ENV: production
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile
+    container_name: yousac_catalog
+    restart: always
+    environment:
+      CATALOG_DB_HOST: postgres-db
+      CATALOG_DB_PORT: 5432
+      CATALOG_DB_NAME: yousac_catalog_db
+      CATALOG_DB_USER: ${POSTGRES_USER}
+      CATALOG_DB_PASS: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_GRPC_URL: auth-service:50052
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
+      GRPC_PORT: 50053
+      PORT: 3003
+      NODE_ENV: production
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  reproduction-service:
+    build:
+      context: ./reproduction-service
+      dockerfile: Dockerfile
+    container_name: yousac_reproduction
+    restart: always
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongodb:27017/${MONGO_DB:-yousac_reproduction_db}?authSource=admin
+      GRPC_PORT: 50051
+      HTTP_PORT: 3001
+      ENV: production
+    networks:
+      - yousac-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    container_name: yousac_analytics
+    restart: always
+    environment:
+      MYSQL_HOST: mysql-db
+      MYSQL_PORT: 3306
+      MYSQL_DB: ${MYSQL_DATABASE:-yousac_analytics_db}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      GRPC_REPRODUCTION_HOST: reproduction-service
+      GRPC_REPRODUCTION_PORT: 50051
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: 0
+      GRPC_PORT: 50054
+      HTTP_PORT: 3002
+      ENV: production
+    networks:
+      - yousac-network
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      reproduction-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3002/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: yousac_notifications
+    restart: always
+    environment:
+      NOTIF_DB_HOST: postgres-db
+      NOTIF_DB_PORT: 5432
+      NOTIF_DB_NAME: yousac_notifications_db
+      NOTIF_DB_USER: ${POSTGRES_USER}
+      NOTIF_DB_PASS: ${POSTGRES_PASSWORD}
+      GRPC_PORT: 50055
+      HTTP_PORT: 3004
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:?falta APP_PUBLIC_URL en .env}
+      SMTP_HOST: ${SMTP_HOST:?falta SMTP_HOST en .env}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      SMTP_FROM: ${SMTP_FROM:-no-reply@ingenieria.usac.edu.gt}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-YoUSAC}
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3004/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ── API GATEWAY (único punto de entrada REST) ────────────────
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: yousac_gateway
+    restart: always
+    environment:
+      AUTH_GRPC_URL: auth-service:50052
+      CATALOG_GRPC_URL: catalog-service:50053
+      REPRODUCTION_GRPC_URL: reproduction-service:50051
+      ANALYTICS_GRPC_URL: analytics-service:50054
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGIN: ${CORS_ORIGIN:?falta CORS_ORIGIN en .env}
+      PORT: 8080
+      NODE_ENV: production
+    ports:
+      - "8080:8080"
+    networks:
+      - yousac-network
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      reproduction-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+
+  # ── FRONTEND ─────────────────────────────────────────────────
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        # Vite resuelve las variables al COMPILAR, no al ejecutar: si esta URL
+        # no es la pública, el bundle quedará pidiendo a localhost y el frontend
+        # desplegado no alcanzará al gateway.
+        VITE_API_URL: ${VITE_API_URL:?falta VITE_API_URL en .env}
+    container_name: yousac_frontend
+    restart: always
+    ports:
+      - "5173:80"
+    networks:
+      - yousac-network
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m

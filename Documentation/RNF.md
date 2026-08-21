@@ -47,3 +47,38 @@
 |----|---------------|---------|
 | RNF-017 | Cada microservicio debe exponer un endpoint de health check (/health) que reporte su estado operativo | Tiempo de detección de servicio caído < 10 segundos mediante polling |
 | RNF-018 | El código fuente de cada microservicio debe incluir cobertura de pruebas unitarias mínima del 70% en las capas de negocio | Cobertura ≥ 70% reportada por la herramienta de testing del lenguaje correspondiente |
+
+### Caché y Tendencias
+
+| ID | Requerimiento | Métrica |
+|----|---------------|---------|
+| RNF-019 | Las consultas de tendencias servidas desde la caché deben responder en menos de 100 ms | < 100 ms en el percentil 95 con la clave presente en Redis |
+| RNF-020 | Las entradas de caché deben expirar automáticamente según su volatilidad, sin intervención manual | TTL de 60 s para estadísticas globales, 120 s para métricas puntuales, 180 s para catálogo y 300 s para tendencias |
+| RNF-021 | La indisponibilidad de la caché no debe interrumpir el servicio de consultas | 100% de las consultas siguen respondiendo con Redis detenido, degradando a la base de datos |
+| RNF-022 | La caché debe operar con un techo de memoria fijo y descartar las claves menos usadas al alcanzarlo | Límite de 256 MB con política `allkeys-lru`; sin crecimiento ilimitado del proceso |
+| RNF-023 | La invalidación de claves no debe bloquear el servidor de caché durante el recorrido del espacio de claves | Uso de `SCAN` iterativo en lugar de `KEYS`; sin bloqueo perceptible con 10.000 claves |
+
+### Notificaciones
+
+| ID | Requerimiento | Métrica |
+|----|---------------|---------|
+| RNF-024 | El envío de correo no debe bloquear la operación que lo origina | El registro de un usuario responde en < 500 ms independientemente de la latencia del servidor SMTP |
+| RNF-025 | Un fallo en el envío de correo no debe revertir ni impedir la operación de negocio asociada | 100% de los registros y publicaciones se completan con el servidor SMTP caído |
+| RNF-026 | Cada notificación debe quedar registrada con trazabilidad individual por destinatario | Una fila por destinatario en la bitácora, con estado y motivo de fallo cuando corresponda |
+
+### Procesamiento por Lotes
+
+| ID | Requerimiento | Métrica |
+|----|---------------|---------|
+| RNF-027 | Una fila inválida dentro de una carga masiva no debe invalidar las restantes | Aislamiento por fila mediante `SAVEPOINT`; el lote continúa tras cada error |
+| RNF-028 | El reprocesamiento de un mismo archivo no debe generar registros duplicados | Idempotencia garantizada por índice único; segunda carga produce 0 inserciones |
+| RNF-029 | El sistema debe procesar archivos CSV de hasta 10 MB | Límite verificado en la capa de recepción, con rechazo explícito por encima del umbral |
+
+### Integración Continua y Despliegue
+
+| ID | Requerimiento | Métrica |
+|----|---------------|---------|
+| RNF-030 | Todo cambio integrado debe superar la verificación automática de los cuatro lenguajes del backend | Pipeline con jobs independientes para TypeScript, Python, Go y orquestación; bloqueo del merge ante cualquier fallo |
+| RNF-031 | Las credenciales y datos sensibles no deben residir en el repositorio | 0 credenciales literales en archivos versionados, verificado automáticamente en cada integración |
+| RNF-032 | El ecosistema completo debe levantarse con un único comando en ambos entornos | `docker compose up -d --build` deja los 13 servicios operativos sin intervención manual |
+| RNF-033 | Los contratos gRPC replicados por servicio deben mantenerse sincronizados | Verificación automática de las 12 copias contra el directorio `proto/` en cada integración |

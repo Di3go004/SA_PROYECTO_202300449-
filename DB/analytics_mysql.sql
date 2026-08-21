@@ -66,8 +66,28 @@ CREATE TABLE sync_logs (
     synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) COMMENT 'Registro de sincronizaciones gRPC desde el servicio de Reproducción';
 
+-- Instantáneas semanales de visualizaciones.
+--
+-- video_metrics guarda el acumulado histórico, con el que no se puede responder
+-- "las clases más vistas ESTA semana": haría falta saber cuántas vistas tenía el
+-- video la semana pasada. Esta tabla almacena el corte semanal y el delta, que es
+-- lo que alimenta el ranking de tendencias.
+CREATE TABLE weekly_video_views (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    video_id        INT NOT NULL COMMENT 'Referencia a recordings en PostgreSQL',
+    course_id       INT NOT NULL,
+    week_start      DATE NOT NULL COMMENT 'Lunes de la semana medida',
+    views_snapshot  INT DEFAULT 0 COMMENT 'Acumulado al cierre de la semana',
+    views_delta     INT DEFAULT 0 COMMENT 'Vistas ganadas durante esa semana',
+    avg_stars       DECIMAL(3,2) DEFAULT 0.00,
+    captured_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_video_week (video_id, week_start)
+) COMMENT 'Serie temporal semanal para el cálculo de tendencias';
+
 -- ── ÍNDICES ─────────────────────────────────────────────────
 
+CREATE INDEX idx_weekly_views_week      ON weekly_video_views(week_start);
+CREATE INDEX idx_weekly_views_delta     ON weekly_video_views(week_start, views_delta DESC);
 CREATE INDEX idx_video_metrics_course   ON video_metrics(course_id);
 CREATE INDEX idx_video_metrics_teacher  ON video_metrics(teacher_id);
 CREATE INDEX idx_student_progress_std   ON student_progress(student_id);
@@ -335,3 +355,99 @@ BEGIN
 END //
 DELIMITER ;
 
+
+-- ============================================================
+-- TENDENCIAS SEMANALES (Proyecto Fase 1)
+-- ============================================================
+
+-- SP: tomar la instantánea semanal de visualizaciones.
+--
+-- Calcula el delta contra el corte de la semana anterior, que es lo que convierte
+-- un acumulado histórico en una serie temporal utilizable para tendencias.
+-- Es idempotente: volver a ejecutarlo durante la misma semana actualiza la fila
+-- en vez de duplicarla, así el scheduler puede correrlo cada hora sin problema.
+DELIMITER //
+CREATE PROCEDURE sp_snapshot_weekly_views()
+BEGIN
+    DECLARE v_week_start DATE;
+    -- Lunes de la semana en curso.
+    SET v_week_start = DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY);
+
+    INSERT INTO weekly_video_views (video_id, course_id, week_start,
+                                    views_snapshot, views_delta, avg_stars)
+    SELECT
+        vm.video_id,
+        vm.course_id,
+        v_week_start,
+        vm.total_views,
+        GREATEST(
+            vm.total_views - COALESCE((
+                SELECT w.views_snapshot
+                  FROM weekly_video_views w
+                 WHERE w.video_id = vm.video_id
+                   AND w.week_start < v_week_start
+                 ORDER BY w.week_start DESC
+                 LIMIT 1
+            ), 0),
+            0
+        ),
+        vm.average_stars
+    FROM video_metrics vm
+    ON DUPLICATE KEY UPDATE
+        views_snapshot = VALUES(views_snapshot),
+        views_delta    = VALUES(views_delta),
+        avg_stars      = VALUES(avg_stars),
+        captured_at    = CURRENT_TIMESTAMP;
+END //
+DELIMITER ;
+
+-- Función: puntaje de tendencia.
+--
+-- Combina volumen y valoración para que un video con muchas vistas pero mal
+-- valorado no desplace a uno con buena recepción. El logaritmo amortigua el peso
+-- de las vistas: pasar de 10 a 100 vistas pesa más que de 1000 a 1090.
+DELIMITER //
+CREATE FUNCTION fn_trending_score(
+    p_views_delta INT,
+    p_avg_stars   DECIMAL(3,2)
+) RETURNS DECIMAL(8,2)
+DETERMINISTIC
+BEGIN
+    RETURN ROUND(
+        (LOG(1 + GREATEST(p_views_delta, 0)) * 10) + (COALESCE(p_avg_stars, 0) * 4),
+        2
+    );
+END //
+DELIMITER ;
+
+-- Vista: clases más vistas de la semana en curso.
+CREATE OR REPLACE VIEW vw_weekly_top_videos AS
+SELECT
+    w.video_id,
+    w.course_id,
+    w.week_start,
+    w.views_delta                                   AS views_this_week,
+    w.views_snapshot                                AS total_views,
+    w.avg_stars,
+    fn_trending_score(w.views_delta, w.avg_stars)   AS trending_score
+FROM weekly_video_views w
+WHERE w.week_start = DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+ORDER BY trending_score DESC, w.views_delta DESC;
+
+-- Vista: ranking de clases mejor valoradas.
+--
+-- Exige un mínimo de 3 valoraciones: sin ese filtro, un video con una sola
+-- calificación de 5 estrellas encabezaría el ranking por encima de uno con
+-- cincuenta valoraciones y promedio 4.8.
+CREATE OR REPLACE VIEW vw_top_rated_videos AS
+SELECT
+    vm.video_id,
+    vm.course_id,
+    vm.teacher_id,
+    vm.average_stars,
+    vm.total_ratings,
+    vm.recommendation_percent,
+    vm.total_views
+FROM video_metrics vm
+WHERE vm.total_ratings >= 3
+ORDER BY vm.average_stars DESC, vm.total_ratings DESC;

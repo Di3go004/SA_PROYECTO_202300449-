@@ -12,6 +12,8 @@ from app.grpc import analytics_pb2, analytics_pb2_grpc
 from app.database import SessionLocal
 from app.metrics.service import MetricsService
 from app.reports.service import ReportsService
+from app.trends.service import TrendsService
+from app.cache import cache
 
 logger = logging.getLogger("analytics.grpc")
 
@@ -131,6 +133,53 @@ class AnalyticsServicer(analytics_pb2_grpc.AnalyticsServiceServicer):
             return _json(ReportsService(db).get_video_engagement(request.id))
         finally:
             db.close()
+
+    # ── Tendencias servidas desde Redis ──────────────────────────────────────
+
+    def _cached(self, resultado, ttl: int) -> analytics_pb2.CachedResponse:
+        """TrendsService devuelve (datos, vino_de_cache); acá se arma la respuesta."""
+        datos, from_cache = resultado
+        return analytics_pb2.CachedResponse(
+            json=json.dumps(datos, default=_json_default),
+            from_cache=from_cache,
+            ttl_seconds=ttl,
+        )
+
+    def GetWeeklyTopVideos(self, request, context):
+        db = self._session()
+        try:
+            limit = request.limit or 10
+            return self._cached(TrendsService(db).get_weekly_top_videos(limit), cache.TTL_TRENDS)
+        finally:
+            db.close()
+
+    def GetTopRatedVideos(self, request, context):
+        db = self._session()
+        try:
+            limit = request.limit or 10
+            return self._cached(TrendsService(db).get_top_rated(limit), cache.TTL_TRENDS)
+        finally:
+            db.close()
+
+    def GetTrendingCourses(self, request, context):
+        db = self._session()
+        try:
+            limit = request.limit or 10
+            return self._cached(TrendsService(db).get_trending_courses(limit), cache.TTL_TRENDS)
+        finally:
+            db.close()
+
+    def SnapshotWeeklyViews(self, request, context):
+        db = self._session()
+        try:
+            return _json(TrendsService(db).snapshot_weekly_views())
+        except Exception as exc:
+            context.abort(grpc.StatusCode.INTERNAL, f"Error al tomar la instantánea: {exc}")
+        finally:
+            db.close()
+
+    def GetCacheStats(self, request, context):
+        return _json(cache.stats())
 
 
 def serve(port: str) -> grpc.Server:

@@ -51,6 +51,10 @@ const analyticsClient = loadClient(
   'analytics.proto', 'analytics', 'AnalyticsService',
   process.env.ANALYTICS_GRPC_URL || 'localhost:50054',
 );
+const notificationsClient = loadClient(
+  'notifications.proto', 'notifications', 'NotificationService',
+  process.env.NOTIFICATIONS_GRPC_URL || 'localhost:50055',
+);
 
 // ── Helpers gRPC ──────────────────────────────────────────────────────────
 function callGrpc(client, method, request, metadata = new grpc.Metadata()) {
@@ -422,6 +426,16 @@ adminRoute('delete', '/api/admin/courses/:id/teachers/:teacher_id', catalogClien
     teacher_id: parseInt(req.params.teacher_id),
   }), 'Error al desasignar docente');
 
+// ── Publicación de grabaciones ─────────────────────────────────────────────
+adminRoute('get', '/api/admin/recordings/unpublished', catalogClient, 'ListUnpublishedRecordings',
+  () => ({}), 'Error al obtener las grabaciones sin publicar', { json: true });
+
+adminRoute('put', '/api/admin/recordings/:id/publish', catalogClient, 'SetRecordingPublished',
+  req => ({
+    recording_id: parseInt(req.params.id),
+    published: req.body.published !== false,
+  }), 'Error al publicar la grabación');
+
 // ── Ingesta masiva CSV ─────────────────────────────────────────────────────
 // El archivo se recibe en memoria y NO se escribe a disco: se reenvía como
 // texto por gRPC y catalog-service lo parsea. El gateway no interpreta el
@@ -475,6 +489,32 @@ adminRoute('get', '/api/admin/import/batches', catalogClient, 'ListImportBatches
   () => ({}), 'Error al obtener el historial de cargas', { json: true });
 adminRoute('get', '/api/admin/import/batches/:id', catalogClient, 'GetImportBatch',
   req => ({ id: parseInt(req.params.id) }), 'Error al obtener el detalle de la carga', { json: true });
+
+// ── Notificaciones por correo ──────────────────────────────────────────────
+// Solo lectura de la bitácora: los envíos los disparan auth-service y
+// catalog-service por gRPC cuando ocurre el hecho que los motiva, no el cliente.
+adminRoute('get', '/api/admin/notifications', notificationsClient, 'ListNotifications',
+  req => ({
+    limit: parseInt(req.query.limit) || 50,
+    status: req.query.status || '',
+  }), 'Error al obtener la bitácora de notificaciones', { json: true });
+
+adminRoute('get', '/api/admin/notifications/stats', notificationsClient, 'GetNotificationStats',
+  () => ({}), 'Error al obtener las estadísticas de notificaciones', { json: true });
+
+// Aviso manual del sistema, para anuncios de mantenimiento o avisos generales.
+app.post('/api/admin/notifications/notice', validateJWT, requireAdminRole, async (req, res) => {
+  try {
+    const result = await callGrpc(notificationsClient, 'SendSystemNotice', {
+      recipients: req.body.recipients || [],
+      subject: req.body.subject || '',
+      body: req.body.body || '',
+    }, buildMetadata(req));
+    res.json(result);
+  } catch (err) {
+    handleGrpcError(err, res, 'Error al enviar el aviso');
+  }
+});
 
 // Docentes y roles (viven en auth-service, no en el catálogo)
 adminRoute('get', '/api/admin/teachers', authClient, 'ListTeachers',
@@ -597,6 +637,52 @@ jsonIdRoute('get', '/api/analytics/reports/course/:course_id/progress', analytic
 
 jsonIdRoute('get', '/api/analytics/reports/engagement/:video_id', analyticsClient, 'GetVideoEngagement',
   req => ({ id: parseInt(req.params.video_id) }), 'Error al obtener engagement del video');
+
+// ── Tendencias servidas desde Redis ────────────────────────────────────────
+// Estas RPC devuelven CachedResponse, que además del payload informa si el dato
+// salió de la caché. Se expone como cabecera X-Cache para poder demostrar que
+// Redis está sirviendo tráfico real: la primera petición responde MISS y las
+// siguientes HIT hasta que expire el TTL.
+function trendRoute(path_, rpcMethod, buildRequest, fallbackMessage) {
+  app.get(path_, validateJWT, async (req, res) => {
+    try {
+      const result = await callGrpc(analyticsClient, rpcMethod, buildRequest(req), buildMetadata(req));
+      res.set('X-Cache', result.from_cache ? 'HIT' : 'MISS');
+      res.set('X-Cache-TTL', String(result.ttl_seconds || 0));
+      res.json({
+        data: JSON.parse(result.json),
+        cached: result.from_cache,
+        ttl_seconds: result.ttl_seconds,
+      });
+    } catch (err) {
+      handleGrpcError(err, res, fallbackMessage);
+    }
+  });
+}
+
+trendRoute('/api/analytics/trends/weekly-top', 'GetWeeklyTopVideos',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener las clases más vistas de la semana');
+
+trendRoute('/api/analytics/trends/top-rated', 'GetTopRatedVideos',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener el ranking de clases mejor valoradas');
+
+trendRoute('/api/analytics/trends/courses', 'GetTrendingCourses',
+  req => ({ limit: parseInt(req.query.limit) || 10 }), 'Error al obtener los cursos en tendencia');
+
+// Estado de la caché: es la evidencia que se muestra en la sustentación.
+jsonIdRoute('get', '/api/analytics/cache/stats', analyticsClient, 'GetCacheStats',
+  () => ({}), 'Error al obtener el estado de la caché');
+
+// Fuerza la instantánea semanal e invalida los rankings. Reservado a los roles
+// administrativos porque reescribe la serie temporal que alimenta las tendencias.
+app.post('/api/analytics/trends/snapshot', validateJWT, requireAdminRole, async (req, res) => {
+  try {
+    const result = await callGrpc(analyticsClient, 'SnapshotWeeklyViews', {}, buildMetadata(req));
+    res.json(JSON.parse(result.json));
+  } catch (err) {
+    handleGrpcError(err, res, 'Error al tomar la instantánea semanal');
+  }
+});
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`✅ API Gateway (REST↔gRPC) corriendo en puerto ${PORT}`));

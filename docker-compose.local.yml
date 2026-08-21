@@ -1,3 +1,12 @@
+# ============================================================
+# YoUSAC — Orquestación del entorno LOCAL de desarrollo
+#
+# Las credenciales se leen del .env (ver .env.example). Los valores por defecto
+# que aparecen tras `:-` son de desarrollo y existen para que el ecosistema
+# arranque recién clonado, sin configuración previa. En la nube no hay defaults:
+# docker-compose.cloud.yml aborta si falta cualquier variable.
+# ============================================================
+
 networks:
   yousac-network:
     driver: bridge
@@ -16,8 +25,8 @@ services:
     container_name: yousac_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: yousac
-      POSTGRES_PASSWORD: yousac_secret
+      POSTGRES_USER: ${POSTGRES_USER:-yousac}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yousac_secret}
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -26,6 +35,8 @@ services:
       - ./DB/catalog_db.sql:/docker-entrypoint-initdb.d/02_catalog.sql
       # SPs de la Práctica 3: van al final porque dependen de las tablas de 02.
       - ./DB/practica3_sps.sql:/docker-entrypoint-initdb.d/03_practica3_sps.sql
+      - ./DB/notifications_db.sql:/docker-entrypoint-initdb.d/04_notifications.sql
+      - ./DB/proyecto_fase1_sps.sql:/docker-entrypoint-initdb.d/05_proyecto_sps.sql
     ports:
       - "5432:5432"
     networks:
@@ -43,8 +54,8 @@ services:
     restart: unless-stopped
     command: ["mongod", "--quiet"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME: yousac
-      MONGO_INITDB_ROOT_PASSWORD: yousac_secret
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-yousac}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-yousac_secret}
       MONGO_INITDB_DATABASE: yousac_reproduction_db
     volumes:
       - mongodb_data:/data/db
@@ -65,10 +76,10 @@ services:
     container_name: yousac_mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: yousac_root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-yousac_root}
       MYSQL_DATABASE: yousac_analytics_db
-      MYSQL_USER: yousac
-      MYSQL_PASSWORD: yousac_secret
+      MYSQL_USER: ${MYSQL_USER:-yousac}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-yousac_secret}
     volumes:
       - mysql_data:/var/lib/mysql
       - ./DB/analytics_mysql.sql:/docker-entrypoint-initdb.d/init.sql
@@ -77,11 +88,32 @@ services:
     networks:
       - yousac-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "yousac", "-pyousac_secret"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u $$MYSQL_USER -p$$MYSQL_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 60s
+
+  # ── CACHÉ ────────────────────────────────────────────────────
+  # Redis sirve las consultas más repetidas del catálogo y las tendencias, para
+  # que los picos de concurrencia en época de exámenes no golpeen MySQL.
+
+  redis:
+    build:
+      context: ./redis
+      dockerfile: Dockerfile
+    container_name: yousac_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # ── SERVIDOR DE MEDIOS ───────────────────────────────────────
   # Sirve los .mp4 de ejemplo para que el reproductor tenga archivos reales.
@@ -108,6 +140,32 @@ services:
       retries: 3
       start_period: 10s
 
+  # ── SERVIDOR SMTP DE PRUEBAS ─────────────────────────────────
+  # Mailpit captura los correos en una bandeja web en vez de entregarlos. Permite
+  # demostrar las notificaciones sin depender de un proveedor externo ni arriesgar
+  # envíos reales durante las pruebas. En la nube se sustituye por Gmail SMTP
+  # cambiando solo las variables SMTP_* del notification-service.
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: yousac_mailpit
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # bandeja web
+    networks:
+      - yousac-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8025/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ── MICROSERVICIOS (tráfico interno: solo gRPC — ver /proto) ──
 
   auth-service:
@@ -120,10 +178,12 @@ services:
       AUTH_DB_HOST: postgres-db
       AUTH_DB_PORT: 5432
       AUTH_DB_NAME: yousac_auth_db
-      AUTH_DB_USER: yousac
-      AUTH_DB_PASS: yousac_secret
-      JWT_SECRET: supersecreto_yousac_2026
-      JWT_TTL: 8h
+      AUTH_DB_USER: ${POSTGRES_USER:-yousac}
+      AUTH_DB_PASS: ${POSTGRES_PASSWORD:-yousac_secret}
+      JWT_SECRET: ${JWT_SECRET:-supersecreto_yousac_2026}
+      JWT_TTL: ${JWT_TTL:-8h}
+      # Tras un registro exitoso avisa por gRPC al servicio de notificaciones.
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
       GRPC_PORT: 50052
       PORT: 3000
       NODE_ENV: development
@@ -151,12 +211,14 @@ services:
       CATALOG_DB_HOST: postgres-db
       CATALOG_DB_PORT: 5432
       CATALOG_DB_NAME: yousac_catalog_db
-      CATALOG_DB_USER: yousac
-      CATALOG_DB_PASS: yousac_secret
-      JWT_SECRET: supersecreto_yousac_2026
+      CATALOG_DB_USER: ${POSTGRES_USER:-yousac}
+      CATALOG_DB_PASS: ${POSTGRES_PASSWORD:-yousac_secret}
+      JWT_SECRET: ${JWT_SECRET:-supersecreto_yousac_2026}
       # La carga masiva resuelve correo→teacher_id llamando a auth-service por
       # gRPC: los usuarios viven en la otra base y este servicio no la toca.
       AUTH_GRPC_URL: auth-service:50052
+      # Al publicar una grabación avisa a los estudiantes inscritos.
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
       GRPC_PORT: 50053
       PORT: 3003
       NODE_ENV: development
@@ -181,7 +243,7 @@ services:
     container_name: yousac_reproduction
     restart: unless-stopped
     environment:
-      MONGO_URI: mongodb://yousac:yousac_secret@mongodb:27017/yousac_reproduction_db?authSource=admin
+      MONGO_URI: mongodb://${MONGO_USER:-yousac}:${MONGO_PASSWORD:-yousac_secret}@mongodb:27017/${MONGO_DB:-yousac_reproduction_db}?authSource=admin
       GRPC_PORT: 50051
       HTTP_PORT: 3001
       ENV: development
@@ -209,10 +271,13 @@ services:
       MYSQL_HOST: mysql-db
       MYSQL_PORT: 3306
       MYSQL_DB: yousac_analytics_db
-      MYSQL_USER: yousac
-      MYSQL_PASSWORD: yousac_secret
+      MYSQL_USER: ${MYSQL_USER:-yousac}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-yousac_secret}
       GRPC_REPRODUCTION_HOST: reproduction-service
       GRPC_REPRODUCTION_PORT: 50051
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
       GRPC_PORT: 50054
       HTTP_PORT: 3002
       ENV: development
@@ -226,11 +291,50 @@ services:
         condition: service_healthy
       reproduction-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3002/health')"]
       interval: 15s
       timeout: 5s
       retries: 3
+
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: yousac_notifications
+    restart: unless-stopped
+    environment:
+      NOTIF_DB_HOST: postgres-db
+      NOTIF_DB_PORT: 5432
+      NOTIF_DB_NAME: yousac_notifications_db
+      NOTIF_DB_USER: ${POSTGRES_USER:-yousac}
+      NOTIF_DB_PASS: ${POSTGRES_PASSWORD:-yousac_secret}
+      GRPC_PORT: 50055
+      HTTP_PORT: 3004
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:5173}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USE_TLS: "false"
+      SMTP_FROM: no-reply@ingenieria.usac.edu.gt
+      SMTP_FROM_NAME: YoUSAC
+    ports:
+      - "50055:50055" # gRPC (consumido por auth-service y catalog-service)
+      - "3004:3004"   # HTTP: solo /health
+    networks:
+      - yousac-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3004/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # ── API GATEWAY (único punto de entrada REST del cliente web) ─
 
@@ -245,8 +349,9 @@ services:
       CATALOG_GRPC_URL: catalog-service:50053
       REPRODUCTION_GRPC_URL: reproduction-service:50051
       ANALYTICS_GRPC_URL: analytics-service:50054
-      JWT_SECRET: supersecreto_yousac_2026
-      CORS_ORIGIN: http://localhost:5173
+      NOTIFICATIONS_GRPC_URL: notification-service:50055
+      JWT_SECRET: ${JWT_SECRET:-supersecreto_yousac_2026}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
       PORT: 8080
     ports:
       - "8080:8080"
@@ -273,10 +378,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # Servidor de Vite con recarga en caliente. La imagen de producción se
+      # compila desde la etapa `production` en docker-compose.cloud.yml.
+      target: development
     container_name: yousac_frontend
     restart: unless-stopped
     environment:
-      VITE_API_URL: http://localhost:8080
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     ports:
       - "5173:5173"
     networks:

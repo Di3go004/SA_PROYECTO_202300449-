@@ -17,6 +17,19 @@ service AnalyticsService {
   rpc GetTeacherPerformance (IdRequest)             returns (JsonResponse);
   rpc GetCourseProgress     (IdRequest)             returns (JsonResponse);
   rpc GetVideoEngagement    (IdRequest)             returns (JsonResponse);
+
+  // ── Tendencias con caché en Redis (Proyecto Fase 1) ──────────────────────
+  // Son las consultas más repetidas de la plataforma: todos los estudiantes ven
+  // el mismo ranking, así que se sirven desde Redis con TTL en vez de recalcular
+  // el agregado en MySQL por cada petición.
+  rpc GetWeeklyTopVideos    (LimitRequest)          returns (CachedResponse);
+  rpc GetTopRatedVideos     (LimitRequest)          returns (CachedResponse);
+  rpc GetTrendingCourses    (LimitRequest)          returns (CachedResponse);
+
+  // Operativas de la caché: la primera dispara la instantánea semanal e invalida
+  // los rankings; la segunda expone el estado de Redis para poder verificarlo.
+  rpc SnapshotWeeklyViews   (Empty)                 returns (JsonResponse);
+  rpc GetCacheStats         (Empty)                 returns (JsonResponse);
 }
 
 message Empty {}
@@ -30,3 +43,12 @@ message LimitRequest { int32 limit = 1; }
 // Filas/vistas de analytics_mysql.sql (vw_top_videos, vw_system_stats,
 // vw_teacher_performance, vw_course_student_progress, etc.) viajan como JSON.
 message JsonResponse { string json = 1; }
+
+// Igual que JsonResponse pero informando el origen del dato. El gateway traduce
+// `from_cache` a la cabecera HTTP X-Cache: HIT|MISS, que es lo que permite
+// demostrar que Redis está sirviendo tráfico real y no solo está levantado.
+message CachedResponse {
+  string json       = 1;
+  bool   from_cache = 2;
+  int32  ttl_seconds = 3;
+}

@@ -3,12 +3,14 @@ import { Injectable, UnauthorizedException, BadRequestException, ForbiddenExcept
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { AuthDatabaseService } from '../common/database.service';
+import { NotificationsGrpcClient } from '../common/notifications-grpc.client';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly db: AuthDatabaseService,
+    private readonly notifications: NotificationsGrpcClient,
   ) {}
 
   private isInstitutionalEmail(email: string): boolean {
@@ -43,6 +45,11 @@ export class AuthService {
       }
       throw new BadRequestException(msg || 'Error al registrar usuario');
     }
+
+    // Efecto secundario, deliberadamente fuera del try anterior: el registro ya
+    // se confirmó y un fallo de correo no debe revertirlo ni propagarse.
+    // sp_register_user asigna el rol estudiante por defecto (role_id = 2).
+    this.notifications.sendWelcomeEmail(email, fullName, 'estudiante');
 
     return { message: 'Usuario registrado exitosamente' };
   }

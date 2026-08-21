@@ -1,0 +1,65 @@
+syntax = "proto3";
+package notifications;
+option go_package = "./proto";
+
+// Contrato gRPC del microservicio de Notificaciones (Python).
+//
+// A diferencia del resto, sus consumidores no son el api-gateway sino otros
+// microservicios: auth-service avisa cuando alguien se registra y catalog-service
+// cuando se publica una grabación. El gateway solo consulta la bitácora, que es
+// lo único que necesita el panel administrativo.
+service NotificationService {
+  // Confirmación de registro a la cuenta institucional.
+  rpc SendWelcomeEmail      (WelcomeRequest)        returns (SendResponse);
+
+  // Aviso de nueva clase grabada a los estudiantes inscritos en el curso.
+  rpc SendNewRecordingAlert (NewRecordingRequest)   returns (SendResponse);
+
+  // Aviso genérico del sistema (mantenimiento, cambios de credenciales…).
+  rpc SendSystemNotice      (SystemNoticeRequest)   returns (SendResponse);
+
+  // Bitácora de envíos, para evidenciar en el panel qué se mandó y qué falló.
+  rpc ListNotifications     (ListRequest)           returns (JsonResponse);
+  rpc GetNotificationStats  (Empty)                 returns (JsonResponse);
+}
+
+message Empty {}
+message JsonResponse { string json = 1; }
+
+// El envío es asíncrono respecto de quien lo pide: la RPC confirma que quedó
+// encolado y persistido, no que el servidor de correo ya lo entregó. Bloquear a
+// auth-service esperando el SMTP haría que un registro fallara por un problema
+// de correo, que es un efecto secundario y no parte de la transacción.
+message SendResponse {
+  bool   queued          = 1;
+  int32  notification_id = 2;
+  string message         = 3;
+}
+
+message WelcomeRequest {
+  string email     = 1;
+  string full_name = 2;
+  string role      = 3;
+}
+
+message NewRecordingRequest {
+  int32           recording_id = 1;
+  string          title        = 2;
+  string          course_name  = 3;
+  string          course_code  = 4;
+  string          teacher_name = 5;
+  // Correos de los estudiantes inscritos. Los resuelve quien invoca, que es el
+  // único que conoce las inscripciones.
+  repeated string recipients   = 6;
+}
+
+message SystemNoticeRequest {
+  repeated string recipients = 1;
+  string          subject    = 2;
+  string          body       = 3;
+}
+
+message ListRequest {
+  int32  limit  = 1;
+  string status = 2;  // vacío = todos; 'enviado' | 'fallido' | 'pendiente'
+}
