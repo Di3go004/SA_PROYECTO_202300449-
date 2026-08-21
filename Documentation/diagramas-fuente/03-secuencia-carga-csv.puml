@@ -1,0 +1,95 @@
+@startuml secuencia-carga-csv
+' ============================================================
+' YoUSAC — Secuencia: carga masiva de grabaciones desde CSV
+' Muestra el aislamiento por fila con SAVEPOINT.
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam ArrowColor #06007C
+skinparam ParticipantBorderColor #06007C
+skinparam DatabaseBorderColor #196584
+skinparam NoteBackgroundColor #F5F2FC
+skinparam NoteBorderColor #196584
+
+title Carga masiva de grabaciones (CSV)
+
+actor "Administrador" as admin
+participant "Frontend" as fe
+participant "API Gateway" as gw
+participant "catalog-service" as cat
+participant "auth-service" as auth
+database "PostgreSQL\ncatalog_db" as db
+
+admin -> fe : selecciona archivo .csv
+fe -> gw : POST /api/admin/import/csv\nmultipart/form-data
+
+activate gw
+gw -> gw : validateJWT
+gw -> gw : requireAdminRole
+note right of gw
+  Primera barrera de RBAC.
+  El microservicio vuelve a
+  verificar el rol al recibir
+  la metadata gRPC.
+end note
+gw -> gw : multer en memoria\n(nunca se escribe a disco)
+gw -> cat : gRPC BulkImportRecordings\n(filename, csv_content)
+deactivate gw
+
+activate cat
+cat -> cat : parseCsv() — RFC 4180
+cat -> cat : validateHeaders()
+
+group Resolución de docentes — una sola llamada por archivo
+  cat -> auth : gRPC ResolveTeachersByEmail\n(correos únicos) + JWT del usuario
+  activate auth
+  auth -> auth : filtra a catedráticos y auxiliares
+  auth --> cat : correo → teacher_id
+  deactivate auth
+end
+
+cat -> db : BEGIN
+cat -> db : CALL sp_start_import_batch()
+db --> cat : batch_id
+
+loop por cada fila del archivo
+  cat -> db : SAVEPOINT fila_actual
+  cat -> db : CALL sp_import_recording_row(...)
+  activate db
+
+  alt fila válida
+    db -> db : upsert escuela → semestre → curso
+    db -> db : asigna docente al curso
+    note right of db
+      El orden es obligatorio:
+      trg_validate_teacher_course
+      rechaza toda grabación cuyo
+      docente no esté asignado.
+    end note
+    db -> db : INSERT grabación
+    db --> cat : INSERTADO | OMITIDO
+    deactivate db
+    cat -> db : RELEASE SAVEPOINT
+
+  else fila inválida
+    db --> cat : RAISE EXCEPTION
+    cat -> db : ROLLBACK TO SAVEPOINT fila_actual
+    note right of cat
+      Sin SAVEPOINT, la excepción
+      dejaría abortada la transacción
+      completa y se perdería el lote.
+    end note
+    cat -> db : CALL sp_log_import_error(...)
+  end
+end
+
+cat -> db : CALL sp_finish_import_batch(...)
+cat -> db : COMMIT
+cat --> gw : resumen + errores por fila
+deactivate cat
+
+gw --> fe : 200 OK
+fe --> admin : leídas / insertadas / omitidas / con error\n+ tabla de errores por fila
+
+@enduml

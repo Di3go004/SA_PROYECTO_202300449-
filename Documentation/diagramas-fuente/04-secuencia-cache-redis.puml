@@ -1,0 +1,110 @@
+@startuml secuencia-cache-redis
+' ============================================================
+' YoUSAC — Secuencia: consulta de tendencias con caché Redis
+' Cubre los tres caminos: MISS, HIT y caída de la caché.
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam ArrowColor #06007C
+skinparam ParticipantBorderColor #06007C
+skinparam DatabaseBorderColor #196584
+skinparam NoteBackgroundColor #F5F2FC
+skinparam NoteBorderColor #196584
+
+title Consulta de tendencias con caché (Redis)
+
+actor "Usuario" as user
+participant "API Gateway" as gw
+participant "analytics-service" as ana
+database "Redis" as redis
+database "MySQL\nanalytics_db" as mysql
+
+== Primera consulta — la clave no está en caché ==
+
+user -> gw : GET /api/analytics/trends/weekly-top
+activate gw
+gw -> ana : gRPC GetWeeklyTopVideos(limit)
+activate ana
+
+ana -> redis : GET yousac:analytics:trends:weekly_top:10
+redis --> ana : (nil)
+note right of ana : fallo de caché
+
+ana -> mysql : SELECT * FROM vw_weekly_top_videos
+activate mysql
+mysql -> mysql : fn_trending_score(views_delta, avg_stars)
+mysql --> ana : ranking calculado
+deactivate mysql
+
+ana -> redis : SETEX clave, TTL 300 s, resultado
+ana --> gw : CachedResponse(json, from_cache=false)
+deactivate ana
+
+gw -> gw : X-Cache: MISS
+gw --> user : 200 OK
+deactivate gw
+
+== Consultas siguientes — dentro del TTL ==
+
+user -> gw : GET /api/analytics/trends/weekly-top
+activate gw
+gw -> ana : gRPC GetWeeklyTopVideos(limit)
+activate ana
+
+ana -> redis : GET yousac:analytics:trends:weekly_top:10
+redis --> ana : resultado serializado
+note right of ana
+  MySQL no se consulta.
+  Es lo que evita que los picos
+  de concurrencia en época de
+  exámenes golpeen la base.
+end note
+
+ana --> gw : CachedResponse(json, from_cache=true)
+deactivate ana
+gw -> gw : X-Cache: HIT
+gw --> user : 200 OK
+deactivate gw
+
+== Invalidación — cambian los datos de origen ==
+
+participant "Scheduler" as sched
+sched -> ana : cada 15 min
+activate ana
+ana -> mysql : CALL sp_snapshot_weekly_views()
+note right of mysql
+  Calcula el delta semanal contra
+  el corte anterior: convierte el
+  acumulado histórico en serie
+  temporal.
+end note
+ana -> redis : SCAN + DELETE\nyousac:analytics:trends:*
+note right of redis
+  SCAN y no KEYS: KEYS bloquea
+  el servidor mientras recorre
+  todo el espacio de claves.
+end note
+deactivate ana
+
+== Degradación — la caché no responde ==
+
+user -> gw : GET /api/analytics/trends/weekly-top
+activate gw
+gw -> ana : gRPC GetWeeklyTopVideos(limit)
+activate ana
+ana ->x redis : GET (sin conexión)
+note right of ana
+  La excepción se captura y se
+  trata como fallo de caché.
+  La caché es un acelerador,
+  nunca un punto único de fallo.
+end note
+ana -> mysql : SELECT * FROM vw_weekly_top_videos
+mysql --> ana : ranking calculado
+ana --> gw : CachedResponse(json, from_cache=false)
+deactivate ana
+gw --> user : 200 OK
+deactivate gw
+
+@enduml

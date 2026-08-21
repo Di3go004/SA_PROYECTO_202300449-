@@ -1,0 +1,125 @@
+@startuml casos-uso-alto-nivel
+' ============================================================
+' YoUSAC — Diagrama de Casos de Uso de Alto Nivel
+' Actualizado con los cuatro roles y los módulos de administración,
+' analítica y notificaciones.
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam ArrowColor #06007C
+skinparam actorBorderColor #06007C
+skinparam usecaseBorderColor #196584
+skinparam packageBorderColor #777684
+
+title YoUSAC — Casos de Uso de Alto Nivel
+
+left to right direction
+
+actor "Estudiante" as est
+actor "Auxiliar" as aux
+actor "Catedrático" as cat
+actor "Administrador" as adm
+actor "Sistema\n(procesos programados)" as sys
+
+' La herencia expresa que quien tiene más permisos conserva los del rol anterior.
+est <|-- aux
+aux <|-- cat
+cat <|-- adm
+
+rectangle "YoUSAC — Plataforma de video académico" {
+
+  package "Autenticación" {
+    usecase "CU-01\nRegistrarse con\ncorreo institucional" as cu01
+    usecase "CU-02\nIniciar sesión" as cu02
+    usecase "CU-03\nCerrar sesión" as cu03
+  }
+
+  package "Catálogo y reproducción" {
+    usecase "CU-04\nExplorar catálogo\npaginado" as cu04
+    usecase "CU-05\nFiltrar y buscar\ngrabaciones" as cu05
+    usecase "CU-06\nReproducir clase\ncon checkpoint" as cu06
+    usecase "CU-07\nCalificar clase" as cu07
+    usecase "CU-08\nConsultar mis cursos\ny avance" as cu08
+  }
+
+  package "Administración académica" {
+    usecase "CU-09\nGestionar semestres" as cu09
+    usecase "CU-10\nGestionar escuelas" as cu10
+    usecase "CU-11\nGestionar cursos" as cu11
+    usecase "CU-12\nAsignar docentes\na curso" as cu12
+    usecase "CU-13\nPublicar grabación" as cu13
+    usecase "CU-14\nCargar catálogo\nmasivo por CSV" as cu14
+    usecase "CU-15\nConsultar bitácora\nde cargas" as cu15
+  }
+
+  package "Gestión de usuarios" {
+    usecase "CU-16\nAsignar roles" as cu16
+    usecase "CU-17\nBloquear o reactivar\nusuario" as cu17
+  }
+
+  package "Analítica y tendencias" {
+    usecase "CU-18\nConsultar clases más\nvistas de la semana" as cu18
+    usecase "CU-19\nConsultar ranking de\nmejor valoradas" as cu19
+    usecase "CU-20\nVerificar estado\nde la caché" as cu20
+    usecase "CU-21\nSincronizar métricas\nde reproducción" as cu21
+    usecase "CU-22\nRegistrar instantánea\nsemanal" as cu22
+  }
+
+  package "Notificaciones" {
+    usecase "CU-23\nEnviar confirmación\nde registro" as cu23
+    usecase "CU-24\nNotificar nueva clase\na inscritos" as cu24
+    usecase "CU-25\nEnviar aviso\ndel sistema" as cu25
+    usecase "CU-26\nConsultar bitácora\nde notificaciones" as cu26
+  }
+}
+
+' ── Estudiante ──
+est --> cu01
+est --> cu02
+est --> cu03
+est --> cu04
+est --> cu05
+est --> cu06
+est --> cu07
+est --> cu08
+
+' ── Auxiliar (hereda de Estudiante) ──
+aux --> cu09
+aux --> cu10
+aux --> cu11
+aux --> cu12
+aux --> cu13
+aux --> cu14
+aux --> cu15
+aux --> cu18
+aux --> cu19
+aux --> cu20
+aux --> cu26
+
+' ── Administrador (hereda de Catedrático) ──
+adm --> cu16
+adm --> cu17
+adm --> cu25
+
+' ── Procesos programados ──
+sys --> cu21
+sys --> cu22
+sys --> cu23
+sys --> cu24
+
+' ── Relaciones entre casos de uso ──
+cu01 ..> cu23 : <<include>>
+cu13 ..> cu24 : <<include>>
+cu14 ..> cu13 : <<extend>>
+cu04 ..> cu05 : <<extend>>
+cu06 ..> cu07 : <<extend>>
+cu18 ..> cu22 : <<include>>
+
+note bottom of sys
+  Casos de uso disparados por el
+  scheduler o como efecto de otra
+  operación, sin actor humano directo.
+end note
+
+@enduml

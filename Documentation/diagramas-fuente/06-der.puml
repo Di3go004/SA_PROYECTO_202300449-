@@ -1,0 +1,289 @@
+@startuml der
+' ============================================================
+' YoUSAC — Modelo Entidad-Relación (Database per Microservice)
+'
+' Cada microservicio tiene su propia base y ninguno consulta las tablas de otro.
+' Las relaciones entre bases distintas son REFERENCIAS LÓGICAS: se guarda el
+' identificador, pero no existe clave foránea porque la tabla referenciada vive
+' en otro motor. Se resuelven por gRPC en tiempo de ejecución.
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam linetype ortho
+skinparam ArrowColor #06007C
+skinparam classBorderColor #06007C
+skinparam packageBorderColor #196584
+
+title YoUSAC — Modelo Entidad-Relación por microservicio
+
+package "yousac_auth_db · PostgreSQL" #F5F2FC {
+  entity roles {
+    * id : SERIAL <<PK>>
+    --
+    * name : VARCHAR(50) <<UK>>
+    description : VARCHAR(255)
+    created_at : TIMESTAMP
+  }
+
+  entity users {
+    * id : SERIAL <<PK>>
+    --
+    * email : VARCHAR(255) <<UK>>
+    * password_hash : VARCHAR(255)
+    * full_name : VARCHAR(255)
+    * role_id : INT <<FK>>
+    is_active : BOOLEAN
+    is_blocked : BOOLEAN
+    failed_attempts : INT
+    last_login : TIMESTAMP
+  }
+
+  entity audit_logs {
+    * id : SERIAL <<PK>>
+    --
+    * user_id : INT <<FK>>
+    * action : VARCHAR(100)
+    ip_address : VARCHAR(45)
+    created_at : TIMESTAMP
+  }
+
+  entity revoked_tokens {
+    * id : SERIAL <<PK>>
+    --
+    * token_jti : VARCHAR(255) <<UK>>
+    * user_id : INT <<FK>>
+    * expires_at : TIMESTAMP
+  }
+
+  roles ||--o{ users : "clasifica"
+  users ||--o{ audit_logs : "genera"
+  users ||--o{ revoked_tokens : "revoca"
+}
+
+package "yousac_catalog_db · PostgreSQL" #F5F2FC {
+  entity semesters {
+    * id : SERIAL <<PK>>
+    --
+    * name : VARCHAR(50)
+    * year : INT
+    * code : VARCHAR(50) <<UK>>
+    is_active : BOOLEAN
+  }
+
+  entity schools {
+    * id : SERIAL <<PK>>
+    --
+    * name : VARCHAR(255) <<UK>>
+    * code : VARCHAR(50) <<UK>>
+  }
+
+  entity courses {
+    * id : SERIAL <<PK>>
+    --
+    * name : VARCHAR(255)
+    * code : VARCHAR(50) <<UK>>
+    * school_id : INT <<FK>>
+    semester_id : INT <<FK>>
+    semester : VARCHAR(50)
+    year : INT
+  }
+
+  entity course_teachers {
+    * id : SERIAL <<PK>>
+    --
+    * course_id : INT <<FK>>
+    * teacher_id : INT <<ref. lógica>>
+  }
+
+  entity enrollments {
+    * id : SERIAL <<PK>>
+    --
+    * student_id : INT <<ref. lógica>>
+    * course_id : INT <<FK>>
+    is_active : BOOLEAN
+    enrolled_by : INT <<ref. lógica>>
+  }
+
+  entity recordings {
+    * id : SERIAL <<PK>>
+    --
+    * title : VARCHAR(255)
+    description : TEXT
+    * course_id : INT <<FK>>
+    * teacher_id : INT <<ref. lógica>>
+    * video_url : VARCHAR(500) <<UK>>
+    duration_seconds : INT
+    is_published : BOOLEAN
+    recommendation_pct : DECIMAL(5,2)
+    tags : TEXT[]
+  }
+
+  entity csv_import_batches {
+    * id : SERIAL <<PK>>
+    --
+    * filename : VARCHAR(255)
+    * uploaded_by : INT <<ref. lógica>>
+    total_rows : INT
+    inserted_rows : INT
+    skipped_rows : INT
+    failed_rows : INT
+    * status : VARCHAR(30)
+  }
+
+  entity csv_import_errors {
+    * id : SERIAL <<PK>>
+    --
+    * batch_id : INT <<FK>>
+    * row_number : INT
+    column_name : VARCHAR(100)
+    raw_line : TEXT
+    * error_message : TEXT
+  }
+
+  semesters ||--o{ courses : "agrupa"
+  schools   ||--o{ courses : "pertenece a"
+  courses   ||--o{ course_teachers : "asigna"
+  courses   ||--o{ enrollments : "inscribe"
+  courses   ||--o{ recordings : "contiene"
+  csv_import_batches ||--o{ csv_import_errors : "registra"
+}
+
+package "yousac_notifications_db · PostgreSQL" #F5F2FC {
+  entity notifications {
+    * id : SERIAL <<PK>>
+    --
+    * recipient : VARCHAR(255)
+    * subject : VARCHAR(500)
+    * template : VARCHAR(50)
+    related_type : VARCHAR(50)
+    related_id : INT <<ref. lógica>>
+    * status : VARCHAR(20)
+    error_message : TEXT
+    attempts : INT
+    sent_at : TIMESTAMP
+  }
+
+  entity notification_audit {
+    * id : SERIAL <<PK>>
+    --
+    * notification_id : INT <<FK>>
+    old_status : VARCHAR(20)
+    * new_status : VARCHAR(20)
+    detail : TEXT
+    changed_at : TIMESTAMP
+  }
+
+  notifications ||--o{ notification_audit : "audita"
+}
+
+package "yousac_analytics_db · MySQL" #F5F2FC {
+  entity video_metrics {
+    * id : INT <<PK>>
+    --
+    * video_id : INT <<UK, ref. lógica>>
+    * course_id : INT <<ref. lógica>>
+    * teacher_id : INT <<ref. lógica>>
+    total_views : INT
+    unique_viewers : INT
+    total_ratings : INT
+    average_stars : DECIMAL(3,2)
+    recommendation_percent : DECIMAL(5,2)
+    completion_rate : DECIMAL(5,2)
+  }
+
+  entity weekly_video_views {
+    * id : INT <<PK>>
+    --
+    * video_id : INT <<ref. lógica>>
+    * course_id : INT <<ref. lógica>>
+    * week_start : DATE
+    views_snapshot : INT
+    views_delta : INT
+    avg_stars : DECIMAL(3,2)
+  }
+
+  entity course_metrics {
+    * id : INT <<PK>>
+    --
+    * course_id : INT <<UK, ref. lógica>>
+    total_students : INT
+    average_progress : DECIMAL(5,2)
+  }
+
+  entity teacher_stats {
+    * id : INT <<PK>>
+    --
+    * teacher_id : INT <<UK, ref. lógica>>
+    total_recordings : INT
+    total_views : INT
+  }
+
+  entity student_progress {
+    * id : INT <<PK>>
+    --
+    * student_id : INT <<ref. lógica>>
+    * course_id : INT <<ref. lógica>>
+    videos_watched : INT
+    videos_completed : INT
+    overall_progress : DECIMAL(5,2)
+  }
+
+  entity sync_logs {
+    * id : INT <<PK>>
+    --
+    * entity_type : VARCHAR(50)
+    * entity_id : INT
+    * status : ENUM
+    error_msg : TEXT
+  }
+}
+
+package "yousac_reproduction_db · MongoDB" #F5F2FC {
+  entity checkpoints <<colección>> {
+    _id : ObjectId
+    --
+    user_id : String <<ref. lógica>>
+    video_id : String <<ref. lógica>>
+    position_seconds : Int
+    total_seconds : Int
+    updated_at : Date
+  }
+
+  entity sessions <<colección>> {
+    _id : ObjectId
+    --
+    user_id : String <<ref. lógica>>
+    video_id : String <<ref. lógica>>
+    events : Array
+    resolution : String
+  }
+
+  entity ratings <<colección>> {
+    _id : ObjectId
+    --
+    user_id : String <<ref. lógica>>
+    video_id : String <<ref. lógica>>
+    stars : Int
+    comment : String
+  }
+}
+
+' ── Referencias lógicas entre bases (sin FK física) ──
+users ..> course_teachers : "teacher_id\n(gRPC)"
+users ..> enrollments     : "student_id\n(gRPC)"
+users ..> recordings      : "teacher_id\n(gRPC)"
+users ..> notifications   : "recipient\n(gRPC)"
+recordings ..> video_metrics : "video_id\n(gRPC)"
+recordings ..> checkpoints   : "video_id\n(gRPC)"
+
+legend right
+  |= Símbolo |= Significado |
+  | <<PK>> | Clave primaria |
+  | <<FK>> | Clave foránea real |
+  | <<UK>> | Restricción de unicidad |
+  | <<ref. lógica>> | Identificador de otra base, sin FK |
+  | línea punteada | Relación resuelta por gRPC |
+endlegend
+
+@enduml

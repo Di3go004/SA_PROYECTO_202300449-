@@ -1,0 +1,91 @@
+@startuml descomposicion-modulo6-7
+' ============================================================
+' YoUSAC — Primera descomposición · Módulos 6 y 7
+' Analítica con caché (RF-051 a RF-058) y Notificaciones (RF-059 a RF-066)
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam ArrowColor #06007C
+skinparam actorBorderColor #06007C
+skinparam usecaseBorderColor #196584
+
+title Módulos 6 y 7 — Analítica con Caché y Notificaciones
+
+left to right direction
+
+actor "Estudiante" as est
+actor "Auxiliar" as aux
+actor "Administrador" as adm
+actor "Scheduler" as sched
+
+rectangle "Módulo 6 — Analítica y Tendencias" {
+  usecase "CU-18\nClases más vistas\nde la semana" as cu18
+  usecase "CU-19\nRanking de\nmejor valoradas" as cu19
+  usecase "CU-20\nVerificar estado\nde la caché" as cu20
+  usecase "CU-21\nSincronizar métricas" as cu21
+  usecase "CU-22\nInstantánea semanal" as cu22
+
+  usecase "Consultar caché" as getcache
+  usecase "Calcular agregado\nen base de datos" as calc
+  usecase "Almacenar con TTL" as setcache
+  usecase "Invalidar claves\nafectadas" as inval
+  usecase "Degradar a\nbase de datos" as degrade
+}
+
+rectangle "Módulo 7 — Notificaciones" {
+  usecase "CU-23\nConfirmación\nde registro" as cu23
+  usecase "CU-24\nAviso de\nnueva clase" as cu24
+  usecase "CU-25\nAviso del sistema" as cu25
+  usecase "CU-26\nConsultar bitácora" as cu26
+
+  usecase "Validar dominio\ninstitucional" as valdom
+  usecase "Encolar y persistir" as queue
+  usecase "Entregar por SMTP" as smtp
+  usecase "Auditar cambio\nde estado" as audit
+  usecase "Registrar fallo\ncon su motivo" as failure
+  usecase "Excluir cuentas\nbloqueadas" as excl
+}
+
+est --> cu18
+est --> cu19
+aux --> cu20
+aux --> cu26
+adm --> cu25
+sched --> cu21
+sched --> cu22
+
+' ── Módulo 6 ──
+cu18 ..> getcache : <<include>>
+cu19 ..> getcache : <<include>>
+getcache <.. calc : <<extend>>\n[fallo de caché]
+calc ..> setcache : <<include>>
+getcache <.. degrade : <<extend>>\n[caché no disponible]
+cu22 ..> inval : <<include>>
+cu21 ..> inval : <<include>>
+
+' ── Módulo 7 ──
+cu23 ..> valdom : <<include>>
+cu24 ..> valdom : <<include>>
+cu25 ..> valdom : <<include>>
+cu23 ..> queue : <<include>>
+cu24 ..> queue : <<include>>
+cu25 ..> queue : <<include>>
+queue ..> smtp : <<include>>
+queue ..> audit : <<include>>
+smtp <.. failure : <<extend>>\n[error de entrega]
+cu24 ..> excl : <<include>>
+
+note bottom of degrade
+  RF-056: las tendencias siguen
+  respondiendo aunque Redis
+  no esté disponible.
+end note
+
+note bottom of failure
+  RF-065: la operación que originó
+  el correo no se revierte si el
+  envío falla.
+end note
+
+@enduml

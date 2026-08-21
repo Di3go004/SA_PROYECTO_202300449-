@@ -1,0 +1,103 @@
+@startuml despliegue
+' ============================================================
+' YoUSAC — Diagrama de Despliegue (Vista Física)
+' Entorno de nube sobre Google Cloud Platform.
+' ============================================================
+!theme plain
+skinparam backgroundColor #FCF8FF
+skinparam defaultFontName Inter
+skinparam ArrowColor #06007C
+skinparam nodeBorderColor #06007C
+skinparam databaseBorderColor #196584
+
+title YoUSAC — Vista de Despliegue (GCP)
+
+node "Dispositivo del usuario" as cliente {
+  artifact "Navegador web" as browser
+}
+
+cloud "Google Cloud Platform" {
+
+  node "Firewall de VPC\nreglas de entrada" as fw {
+    artifact "TCP 5173 · frontend" as p1
+    artifact "TCP 8080 · gateway" as p2
+    artifact "TCP 8081 · medios" as p3
+  }
+
+  node "Compute Engine\nyousac-server\ne2-standard-4 · Ubuntu 22.04\n4 vCPU · 16 GB · 50 GB SSD" as vm {
+
+    node "Docker Engine + Compose" as docker {
+
+      node "Red interna: yousac-network" as red {
+
+        component "frontend\n:5173" as c_fe
+        component "api-gateway\n:8080" as c_gw
+        component "media-server\n:8081" as c_media
+
+        component "auth-service\n:50052" as c_auth
+        component "catalog-service\n:50053" as c_cat
+        component "reproduction-service\n:50051" as c_rep
+        component "analytics-service\n:50054" as c_ana
+        component "notification-service\n:50055" as c_notif
+
+        database "postgres-db\n:5432" as d_pg
+        database "mongodb\n:27017" as d_mongo
+        database "mysql-db\n:3306" as d_mysql
+        database "redis\n:6379" as d_redis
+      }
+    }
+
+    storage "Volúmenes persistentes" as vol {
+      artifact "postgres_data"
+      artifact "mongodb_data"
+      artifact "mysql_data"
+      artifact "redis_data"
+    }
+  }
+}
+
+cloud "Servicio externo" {
+  node "Gmail SMTP\nsmtp.gmail.com:587" as gmail
+}
+
+browser --> fw : HTTPS
+p1 --> c_fe
+p2 --> c_gw
+p3 --> c_media
+
+c_gw --> c_auth
+c_gw --> c_cat
+c_gw --> c_rep
+c_gw --> c_ana
+c_gw --> c_notif
+
+c_auth  --> d_pg
+c_cat   --> d_pg
+c_notif --> d_pg
+c_rep   --> d_mongo
+c_ana   --> d_mysql
+c_ana   --> d_redis
+
+c_notif --> gmail : TLS
+
+d_pg    --> vol
+d_mongo --> vol
+d_mysql --> vol
+d_redis --> vol
+
+note right of red
+  Solo tres puertos se publican
+  hacia afuera. Las bases de datos
+  y los puertos gRPC permanecen
+  accesibles únicamente dentro
+  de la red de Docker.
+end note
+
+note bottom of vol
+  Los volúmenes sobreviven al
+  reinicio de los contenedores.
+  restart: always los devuelve al
+  aire tras reiniciar la VM.
+end note
+
+@enduml
