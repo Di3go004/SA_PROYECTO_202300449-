@@ -387,12 +387,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: production
+      args:
+        # Vite resuelve las variables al COMPILAR, no al ejecutar: si esta URL
+        # no es la pública, el bundle quedará pidiendo a localhost y el frontend
+        # desplegado no alcanzará al gateway.
+        VITE_API_URL: ${VITE_API_URL:?falta VITE_API_URL en .env}
     container_name: yousac_frontend
     restart: always
-    environment:
-      VITE_API_URL: ${VITE_API_URL:?falta VITE_API_URL en .env}
     ports:
-      - "5173:5173"
+      - "5173:80"
     networks:
       - yousac-network
     depends_on:

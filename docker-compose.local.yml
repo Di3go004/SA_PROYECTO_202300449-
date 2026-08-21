@@ -378,6 +378,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # Servidor de Vite con recarga en caliente. La imagen de producción se
+      # compila desde la etapa `production` en docker-compose.cloud.yml.
+      target: development
     container_name: yousac_frontend
     restart: unless-stopped
     environment:
